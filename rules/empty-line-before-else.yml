@@ -1,0 +1,11 @@
+id: empty-line-before-else
+language: go
+severity: error
+message: Missing empty line before closing brace preceding else
+note: >
+  Code style requires an empty line before the closing brace of an if
+  block when it is followed by an else (or else if) clause, mirroring
+  the empty-line-after-opening-brace convention.
+rule:
+  kind: if_statement
+  regex: '\S[ \t]*\n[ \t]*\}[ \t]*else\b'

@@ -1,0 +1,418 @@
+{{define "tenant.html"}}
+{{template "head" .}}
+{{with .Data}}
+<h1>{{.Tenant.Slug}} <span class="state {{.Instance.ObservedState}}">{{label .Instance.ObservedState}}</span></h1>
+<p class="sub">
+  <a href="http://{{.Tenant.Hostname}}/">{{.Tenant.Hostname}}</a> ·
+  pocketbase {{.Tenant.RuntimeVersion}} ·
+  owner {{.Owner}} ·
+  you are {{.Role}}
+</p>
+{{if .CanAdmin}}
+<form method="post" action="/t/{{.Tenant.ID}}/admin" target="_blank" class="inline">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <button type="submit" title="Signs you in to /_/ as a superuser with this portal login">Open PocketBase admin</button>
+</form>
+{{end}}
+
+{{if .Tenant.Quarantined}}
+<p class="flash err">Quarantined: the edge returns 503 for this instance; data and container are untouched.
+{{if .QuarantineReason}}Reason: {{.QuarantineReason}}{{end}}</p>
+{{end}}
+
+{{if .EOL}}
+<p class="flash err">PocketBase {{.EOL.Version}} is {{.EOL.State}}{{if not .EOL.EOLAt.IsZero}}, end of life {{stamp .EOL.EOLAt}} ({{.EOL.DaysLeft}} days){{end}}.
+{{if .EOL.Target}}<a href="/t/{{.Tenant.ID}}?tab=runtime">Rehearse the upgrade to {{.EOL.Target}}</a>.{{end}}</p>
+{{end}}
+
+{{range .Drift}}
+<p class="flash err">{{if .Security}}SECURITY{{else}}DRIFT{{end}} · {{.Kind}} · {{.Detail}}</p>
+{{end}}
+
+{{$tab := .Tab}}
+<nav class="tabs">
+  <a href="/t/{{.Tenant.ID}}"{{if eq $tab "overview"}} class="on"{{end}}>Overview</a>
+  <a href="/t/{{.Tenant.ID}}?tab=releases"{{if eq $tab "releases"}} class="on"{{end}}>Releases</a>
+  <a href="/t/{{.Tenant.ID}}?tab=snapshots"{{if eq $tab "snapshots"}} class="on"{{end}}>Snapshots</a>
+  <a href="/t/{{.Tenant.ID}}?tab=runtime"{{if eq $tab "runtime"}} class="on"{{end}}>Runtime</a>
+  <a href="/t/{{.Tenant.ID}}?tab=access"{{if eq $tab "access"}} class="on"{{end}}>Access</a>
+  <a href="/t/{{.Tenant.ID}}?tab=activity"{{if eq $tab "activity"}} class="on"{{end}}>Activity</a>
+  <a href="/t/{{.Tenant.ID}}?tab=ownership"{{if eq $tab "ownership"}} class="on"{{end}}>Ownership{{if .Transfer}} <span class="badge warn">1</span>{{end}}</a>
+</nav>
+
+{{if eq $tab "overview"}}
+<section class="grid">
+  <div class="card">
+    <h2>Resources</h2>
+    <dl>
+      <dt>disk</dt><dd>{{bytes .DiskUsed}} used, {{bytes .DiskFree}} free of {{.Tenant.DiskMiB}} MiB</dd>
+      {{if .Stats}}<dt>cpu</dt><dd>{{printf "%.1f" .Stats.CPUPercent}}%</dd>
+      <dt>memory</dt><dd>{{bytes .Stats.MemBytes}} of {{bytes .Stats.MemLimit}}</dd>{{end}}
+      <dt>last health</dt><dd>{{if .Instance.LastHealthAt}}{{ago .Instance.LastHealthAt}}{{else}}—{{end}}</dd>
+      <dt>restarts</dt><dd>{{.Instance.RestartCount}}</dd>
+      {{if .Instance.LastError}}<dt>last error</dt><dd class="err">{{.Instance.LastError}}</dd>{{end}}
+    </dl>
+    {{if .CanDeploy}}
+    <form method="post" action="/t/{{.Tenant.ID}}/restart" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <button type="submit">Restart</button>
+    </form>
+    <form method="post" action="/t/{{.Tenant.ID}}/backup" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <button type="submit">Snapshot now</button>
+    </form>
+    {{end}}
+  </div>
+
+  <div class="card">
+    <h2>Live release</h2>
+    {{$cur := .Tenant.CurrentRelease}}
+    {{if $cur}}
+    {{range .Releases}}{{if eq .ID $cur}}
+    <dl>
+      <dt>release</dt><dd>{{.ID}}</dd>
+      <dt>app version</dt><dd>{{.PBMin}}–{{.PBMax}}</dd>
+      <dt>uploaded</dt><dd>{{ago .CreatedAt}}</dd>
+    </dl>
+    {{end}}{{end}}
+    {{else}}<p class="empty">Nothing deployed yet.</p>{{end}}
+    <p><a href="/t/{{.Tenant.ID}}?tab=releases">All releases →</a></p>
+  </div>
+
+  <div class="card">
+    <h2>Recent activity</h2>
+    {{if .Audit}}
+    <ul class="timeline">
+      {{range .Audit}}<li><code>{{.Action}}</code> · {{.ActorID}} · {{ago .OccurredAt}}</li>{{end}}
+    </ul>
+    {{else}}<p class="empty">Nothing yet.</p>{{end}}
+    <p><a href="/t/{{.Tenant.ID}}?tab=activity">All activity →</a></p>
+  </div>
+</section>
+{{end}}
+
+{{if eq $tab "releases"}}
+<section class="card">
+  <h2>Deploy a package</h2>
+  {{if .CanDeploy}}
+  <form method="post" action="/t/{{.Tenant.ID}}/upload" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="tab" value="releases">
+    <input type="file" name="package" accept=".zip" required>
+    <label class="check"><input type="checkbox" name="deploy" value="1" checked> deploy immediately</label>
+    <button type="submit">Upload</button>
+    <p class="hint">Zip of <code>pb_hooks/</code>, <code>pb_migrations/</code>, <code>pb_public/</code>
+    and <code>pbapp.json</code>. Expect 1–3 s of downtime.</p>
+  </form>
+  {{else}}<p class="empty">Your role cannot deploy.</p>{{end}}
+</section>
+
+<section class="card">
+  <h2>Releases</h2>
+  {{if .Releases}}
+  <table>
+    <thead><tr><th>release</th><th>app version</th><th>artifact</th><th>status</th><th>uploaded</th><th></th></tr></thead>
+    <tbody>
+    {{range .Releases}}
+      <tr>
+        <td>{{.ID}}{{if eq .ID $.Data.Tenant.CurrentRelease}} <span class="badge">live</span>{{end}}</td>
+        <td>{{.PBMin}}–{{.PBMax}}</td>
+        <td><code>{{short .Sha256}}</code></td>
+        <td><span class="state {{.Status}}">{{label .Status}}</span></td>
+        <td>{{ago .CreatedAt}}</td>
+        <td>
+          {{if $.Data.CanDeploy}}
+          <a href="/t/{{$.Data.Tenant.ID}}/releases/{{.ID}}/download" download>Download</a>
+          {{end}}
+          {{if and $.Data.CanDeploy (ne .ID $.Data.Tenant.CurrentRelease)}}
+          <form method="post" action="/t/{{$.Data.Tenant.ID}}/deploy" class="inline">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="tab" value="releases">
+            <input type="hidden" name="release" value="{{.ID}}">
+            <button type="submit">{{if .DeployedAt}}Roll back to{{else}}Deploy{{end}}</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="empty">No releases yet.</p>{{end}}
+</section>
+
+{{if .Manifest}}
+<section class="card">
+  <h2>Live manifest</h2>
+  <pre>{{.Manifest}}</pre>
+</section>
+{{end}}
+{{end}}
+
+{{if eq $tab "snapshots"}}
+<section class="card">
+  <h2>Snapshots</h2>
+  {{if .CanDeploy}}
+  <form method="post" action="/t/{{.Tenant.ID}}/backup" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="tab" value="snapshots">
+    <button type="submit">Snapshot now</button>
+  </form>
+  {{end}}
+  {{if .Backups}}
+  <table>
+    <thead><tr><th>id</th><th>kind</th><th>pocketbase</th><th>size</th><th>taken</th><th></th></tr></thead>
+    <tbody>
+    {{$v := .}}
+    {{range .Backups}}
+      <tr><td>{{.ID}}</td><td>{{label .Kind}}</td><td>{{.PBVersion}}</td>
+          <td>{{bytes .SizeBytes}}</td><td>{{ago .CreatedAt}}</td>
+          <td>{{if $v.CanDeploy}}
+            <form method="post" action="/t/{{.TenantID}}/backups/{{.ID}}/restore" class="inline"
+                  data-confirm="Restore {{.ID}}? Everything written since {{stamp .CreatedAt}} is replaced.">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <input type="hidden" name="tab" value="snapshots">
+              <button type="submit" class="link" title="Only onto the same PocketBase version">restore</button>
+            </form>
+          {{end}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="empty">No snapshots yet.</p>{{end}}
+</section>
+{{end}}
+
+{{if eq $tab "runtime"}}
+<section class="card">
+  <h2>Runtime</h2>
+  <dl>
+    <dt>running</dt><dd>pocketbase {{.Tenant.RuntimeVersion}}</dd>
+  </dl>
+  {{if and .CanDeploy .Versions}}
+  <form method="post" action="/t/{{.Tenant.ID}}/upgrade" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="tab" value="runtime">
+    <select name="to">
+      {{range .Versions}}<option value="{{.Version}}">{{.Version}} ({{.State}})</option>{{end}}
+    </select>
+    <button type="submit" name="rehearse_only" value="1">Rehearse</button>
+    <button type="submit" name="rehearse_only" value="0">Rehearse and upgrade</button>
+  </form>
+  <p class="hint">Upgrades are one-way; rollback is a snapshot restore.</p>
+  {{else if not .Versions}}<p class="empty">Nothing newer is offered right now.</p>
+  {{else}}<p class="empty">Your role cannot upgrade.</p>{{end}}
+</section>
+
+{{if .Upgrades}}
+<section class="card">
+  <h2>Upgrade jobs</h2>
+  <table>
+    <thead><tr><th>job</th><th>from → to</th><th>state</th><th>rehearsal</th><th>started</th></tr></thead>
+    <tbody>
+    {{range .Upgrades}}
+      <tr><td><a href="/t/{{.TenantID}}/upgrade/{{.ID}}">{{.ID}}</a></td>
+          <td>{{.FromVersion}} → {{.ToVersion}}</td>
+          <td>{{label .State}}{{if .Forced}} (forced){{end}}</td>
+          <td>{{if .Rehearsal}}{{label .Rehearsal}}{{else}}—{{end}}</td>
+          <td>{{ago .CreatedAt}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
+{{end}}
+
+{{if eq $tab "access"}}
+<section class="card">
+  <h2>Outbound access
+    {{if .Tenant.EgressEnabled}}<span class="badge">enforced</span>
+    {{else}}<span class="badge warn">no outbound path</span>{{end}}</h2>
+  {{if .Egress}}
+  <table>
+    <thead><tr><th>host</th><th>state</th><th>refused</th><th>expires</th><th></th></tr></thead>
+    <tbody>
+    {{range .Egress}}
+      <tr>
+        <td>{{.Host}}</td>
+        <td><span class="state {{.State}}">{{label .State}}</span>
+            {{if .Reason}}<br><small>{{.Reason}}</small>{{end}}</td>
+        <td>{{if .Denials}}<strong>{{.Denials}}</strong><br><small>{{ago .LastDenied}}</small>{{else}}—{{end}}</td>
+        <td>{{stamp .Expires}}</td>
+        <td>
+          {{if and $.Data.CanDeploy .GrantID}}
+          {{if eq .State "revoked"}}
+          <form method="post" action="/t/{{$.Data.Tenant.ID}}/grants/{{.GrantID}}/reenable" class="inline">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="tab" value="access">
+            <input name="reason" placeholder="why it's needed again" required>
+            <button type="submit">Re-enable</button>
+          </form>
+          {{else if or (eq .State "approved") (eq .State "auto_approved") (eq .State "pending")}}
+          <form method="post" action="/t/{{$.Data.Tenant.ID}}/grants/{{.GrantID}}/revoke" class="inline">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="tab" value="access">
+            <button type="submit" class="link">revoke</button>
+          </form>
+          {{end}}
+          {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="empty">No outbound access.</p>{{end}}
+</section>
+
+<section class="card">
+  <h2>Attested access</h2>
+  {{if .Access.Notices}}
+  <ul class="feed">
+    {{range .Access.Notices}}
+    <li><span class="hint">{{ago .CreatedAt}}</span> · {{.Body}}</li>
+    {{end}}
+  </ul>
+  {{end}}
+
+  {{if .Access.Report}}
+  <p>Attested {{ago .Access.Attested}} from the host · outcome <strong>{{label .Access.Report.Outcome}}</strong></p>
+  <table>
+    <thead><tr><th>can reach</th><th>authorised by</th><th>expires</th><th>in effect</th></tr></thead>
+    <tbody>
+    {{range .Access.Report.Grants}}
+      <tr>
+        <td>{{label .Kind}} · {{.Subject}}</td>
+        <td>{{if .DecidedBy}}{{.DecidedBy}}{{else}}—{{end}} ({{.State}})</td>
+        <td>{{stamp .ExpiresAt}}</td>
+        <td>{{if .Enforced}}yes{{else if not .Enforcible}}<span class="hint">not enforceable yet</span>{{else}}no{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{if .Access.Report.Findings}}
+  <h3>Findings</h3>
+  <ul>
+    {{range .Access.Report.Findings}}
+    <li{{if .Security}} class="bad"{{end}}>{{.Subject}} — {{.Detail}}</li>
+    {{end}}
+  </ul>
+  {{end}}
+  {{else}}
+  <p class="empty">Not attested yet.</p>
+  {{end}}
+
+  {{if .Access.Reaffirm}}
+  <h3>Inherited with this project</h3>
+  <p class="hint">Re-affirm or it stops being enforced.</p>
+  <table>
+    <tbody>
+    {{range .Access.Reaffirm}}
+      <tr{{if .Lapsed}} class="bad"{{end}}>
+        <td>{{label .Grant.Kind}} · {{.Grant.Subject}}</td>
+        <td>{{if .Lapsed}}lapsed{{else}}due {{stamp .DueAt}}{{end}}</td>
+        <td>
+          <form method="post" action="/t/{{$.Data.Tenant.ID}}/grants/{{.Grant.ID}}/reaffirm" class="inline">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="tab" value="access">
+            <button type="submit">Re-affirm</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+
+  {{if .Access.SigningNote}}<p class="hint">{{.Access.SigningNote}}</p>{{end}}
+</section>
+
+<section class="card">
+  <h2>Platform access to your data</h2>
+  {{if .Access.BreakGlass}}
+  <ul>
+    {{range .Access.BreakGlass}}
+    <li{{if .Open}} class="bad"{{end}}>
+      {{.Grant.RequestedBy}} opened {{.Grant.Subject}} {{ago .Grant.RequestedAt}}{{if .Open}} — open now{{end}}<br>
+      <span class="hint">Reason: {{.Grant.Justification}}</span>
+      {{if .Reviewed}}<br><span class="hint">Reviewed by {{.Review.ReviewedBy}}: {{.Review.Outcome}} — {{.Review.Notes}}</span>
+      {{else if .Overdue}}<br><span class="hint">Past its 24h review.</span>{{end}}
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="empty">Nobody at the platform has opened your data.</p>
+  {{end}}
+  {{if .Access.Accesses}}
+  <ul class="timeline">
+    {{range .Access.Accesses}}
+    <li><code>{{.Action}}</code> · {{.ActorID}} · {{ago .OccurredAt}}</li>
+    {{end}}
+  </ul>
+  {{end}}
+</section>
+{{end}}
+
+{{if eq $tab "activity"}}
+<section class="card">
+  <h2>Logs</h2>
+  <pre class="logs" hx-get="/t/{{.Tenant.ID}}/logs" hx-trigger="load, every 5s" hx-swap="textContent">loading…</pre>
+  <noscript><p class="hint"><a href="/t/{{.Tenant.ID}}/logs">Open the log tail</a>.</p></noscript>
+</section>
+
+<section class="card">
+  <h2>Platform activity</h2>
+  {{if .Audit}}
+  <ul class="timeline">
+    {{range .Audit}}
+    <li><code>{{.Action}}</code> · {{.ActorID}} · {{ago .OccurredAt}}</li>
+    {{end}}
+  </ul>
+  {{else}}<p class="empty">Nothing yet.</p>{{end}}
+</section>
+{{end}}
+
+{{if eq $tab "ownership"}}
+<section class="card">
+  <h2>Ownership</h2>
+  <p>Current owner: <strong>{{.Owner}}</strong>{{if .Tenant.OwnerOrphaned}} <span class="badge warn">orphaned</span>{{end}}</p>
+  {{if .Transfer}}
+  <p class="flash">Offered to <strong>{{.Transfer.ToPrincipal}}</strong> by {{.Transfer.OfferedBy}},
+    expires {{stamp .Transfer.ExpiresAt}}.{{if .Transfer.Reason}} Reason: {{.Transfer.Reason}}{{end}}</p>
+  {{if eq $.Actor.ID .Transfer.ToPrincipal}}
+    <form method="post" action="/t/{{.Tenant.ID}}/owner/accept" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="tab" value="ownership">
+      <button type="submit">Accept ownership</button>
+    </form>
+    <form method="post" action="/t/{{.Tenant.ID}}/owner/decline" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="tab" value="ownership">
+      <button type="submit" class="link">Decline</button>
+    </form>
+  {{else if .CanManage}}
+    <form method="post" action="/t/{{.Tenant.ID}}/owner/cancel" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="tab" value="ownership">
+      <button type="submit" class="link">Withdraw offer</button>
+    </form>
+  {{end}}
+  {{else if .CanManage}}
+  <form method="post" action="/t/{{.Tenant.ID}}/owner/transfer">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="tab" value="ownership">
+    <label>Transfer to <input name="to" placeholder="person:bob" required></label>
+    <label>Reason (operators only) <input name="reason" placeholder=""></label>
+    <button type="submit">Offer transfer</button>
+    <p class="hint">Ownership moves only when they accept.</p>
+  </form>
+  {{end}}
+  <h3>History</h3>
+  <ul class="timeline">
+    {{range .History}}
+    <li>{{.Role}} · {{.PrincipalID}} · granted by {{.GrantedBy}} {{ago .GrantedAt}}
+      {{if .RevokedAt}}· revoked {{ago .RevokedAt}}{{end}}</li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+{{end}}
+{{template "foot" .}}
+{{end}}

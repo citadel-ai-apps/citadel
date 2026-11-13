@@ -1,0 +1,12 @@
+# Probe output: captured rulesets and downloaded PocketBase binaries.
+# Regenerate with test/netprobe/00-baseline.sh.
+test/netprobe/out/
+
+.DS_Store
+bin/
+
+# The cloud-init seed carries your public key; build it locally from the
+# committed template (hack/vm/README.md).
+hack/vm/cloud-init/seed.iso
+hack/vm/cloud-init/meta-data
+hack/vm/cloud-init/user-data

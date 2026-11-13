@@ -1,0 +1,48 @@
+#cloud-config
+# Seed template for the development VM. `hack/vm/create.sh` renders it into
+# user-data, substituting the public key placeholder below, and packs it into
+# the seed image that cloud-init reads on first boot.
+#
+# Do not edit the rendered user-data — it is generated and gitignored. Edit this.
+#
+# It creates the account hack/in-vm.sh logs in as, with passwordless sudo,
+# because the control plane runs as root: it mounts loopback images, writes
+# netfilter rules and chowns tenant data.
+
+hostname: citadel
+manage_etc_hosts: true
+
+users:
+  - name: ubuntu
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys:
+      - "@SSH_PUBKEY@"
+
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+packages:
+  - rsync
+  - curl
+  - qemu-guest-agent
+
+# create.sh grows the disk image before handing it to UTM; growpart and
+# resize_rootfs then extend the root partition and filesystem to fill it on
+# first boot. Without this the image store runs out of room partway through
+# installing Docker.
+#
+# The root filesystem is ext4, which matters: tenant quota images are loopback
+# ext4 files on it.
+growpart:
+  mode: auto
+  devices: ["/"]
+resize_rootfs: true
+
+runcmd:
+  # The repo lands here via rsync from the Mac; it must be writable by the
+  # ssh user, who is not root.
+  - [install, -d, -o, ubuntu, -g, ubuntu, -m, "0755", /opt/citadel]
+  - [systemctl, enable, --now, qemu-guest-agent]

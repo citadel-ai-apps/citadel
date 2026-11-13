@@ -1,0 +1,144 @@
+{{- /*
+Egress proxy configuration (§9.4). Rendered by internal/egressctl from the
+ACTIVE access_grant rows, mapping source IP -> tenant -> allowed domains. Never
+from release.egress_hosts, which is the request and not the decision.
+
+Two filters, not one:
+
+  - the CONNECT target, matched with dstdomain;
+  - the ClientHello SNI, matched with ssl::server_name after peeking at step 1.
+
+Peek-at-step-1 reads the handshake and splices the connection through untouched.
+Nothing is bumped: sslcrtd_program is configured only because the ssl-bump port
+requires it, no generated certificate is ever presented, and no root is injected
+into any tenant container: a hook doing TLS validates the REAL origin certificate, which
+is why §5 puts a CA bundle in the image. Filtering the CONNECT target alone
+would let a hook ask for an allowed host and then speak to a different one.
+*/ -}}
+{{if .SNI -}}
+{{/* The `ssl-bump` port option is what makes Squid consult ssl_bump for a
+CONNECT at all; without it the rules below parse and are silently inert, and
+the SNI is not checked. tls-cert and sslcrtd_program are startup preconditions
+of that option, not evidence of bumping — see images/egress-proxy. */ -}}
+http_port {{.Port}} ssl-bump tls-cert=/etc/squid/bump.pem
+sslcrtd_program /usr/lib/squid/security_file_certgen -s /var/lib/squid/ssl_db -M 4MB
+{{- else -}}
+http_port {{.Port}}
+{{- end}}
+
+# The manager surface, which exists for exactly one caller: the attestation.
+#
+# §14.5 requires the report to observe the ACL as loaded in the RUNNING proxy,
+# never as templated on disk. The generated allowlist on disk was correct once
+# while every request was refused by a binary that had never read it, so the
+# file is not evidence of anything. This is the only way to ask Squid itself
+# what it is enforcing without an exec path into the container.
+#
+# FIRST in the chain, for a reason that is easy to miss: a manager request is
+# addressed to the proxy's OWN port, and 3128 is not a Safe_port. Behind a port
+# check the allow never runs and every manager read is refused — which looks
+# exactly like the ACL working. Observed on the host.
+#
+# The matching deny is here too, above the generated per-tenant allows. A tenant
+# is on this network as well, and the manager report names every tenant's
+# allowlist; below the allows, one tenant could read the whole fleet's external
+# access.
+acl v2p_mgr src {{.MgrIP}}
+cachemgr_passwd none config
+http_access allow manager v2p_mgr
+http_access deny manager
+
+# Only CONNECT to 443 and plain HTTP to 80 or 443 are entertained.
+#
+# These are conditions on each per-tenant allow below, NOT deny lines of their
+# own, and that placement is load-bearing. On an ssl-bump port, a CONNECT
+# refused by any http_access deny other than the final `deny all` is answered
+# with Squid's error page INSIDE the tunnel — a certificate generated for the
+# host it just refused, which is the MITM this proxy promises never to do. Only
+# `deny all` carries `deny_info TCP_RESET` (below), and adding the same to the
+# other ACLs does not change it; verified on the development VM. So every
+# refusal falls through to `deny all`, and is reset.
+acl SSL_ports port 443
+acl Safe_ports port 80 443
+acl CONNECT method CONNECT
+
+# NOTE on DNS: Squid resolves the name, the container never does — a tenant with
+# its own resolver could encode data in subdomain labels and exfiltrate by query
+# alone (§9.4). That property comes from the CONNECT model itself, not from a
+# directive here; `dns_v4_first` was removed in Squid 6 and setting it is an
+# error rather than a no-op.
+
+{{if .SNI}}acl step1 at_step SslBump1
+acl step2 at_step SslBump2
+# Peek at step 1 reads the ClientHello. The SNI is not known until step 2, so
+# every SNI test below is qualified with step2 — an unqualified `ssl_bump
+# terminate ... !sni` is evaluated at step 1 too, where the name is unknown, the
+# negation is therefore true, and EVERY connection is killed including the
+# allowed ones. This shipped that way once and saw a 403 on a host that
+# was correctly in the allowlist (design.md §9.4).
+ssl_bump peek step1
+{{end}}
+# Destinations no grant can reach, whatever name led to them (INV-7).
+#
+# The allowlist below is by NAME, and a name is only as good as what it
+# resolves to: a granted host the tenant controls can resolve to the metadata
+# endpoint, to another tenant's bridge, or to the host itself (a nip.io-style
+# name is granted at Tier 1 like any other). netfilter cannot catch that — the
+# connection leaves from the proxy, not the tenant — so every allow below also
+# requires that no address the name resolves to is in this list. A condition on
+# the allow rather than a deny of its own, for the reset described above.
+acl v2p_blocked_dst dst{{range .Blocked}} {{.}}{{end}}
+
+# --- generated from active grants; do not edit by hand ---
+{{/* -n: never reverse-resolve. Without it, a CONNECT to a bare IP address
+falls back to the address's PTR record, which whoever owns the address
+controls, and a PTR naming any granted host matches. */ -}}
+{{range .Tenants}}
+# {{.TenantID}}
+acl t_{{.ACLName}}_src src {{.IP}}
+acl t_{{.ACLName}}_dst dstdomain -n{{range .Hosts}} {{.}}{{end}}
+{{if $.SNI}}acl t_{{.ACLName}}_sni ssl::server_name{{range .Hosts}} {{.}}{{end}}
+ssl_bump terminate step2 t_{{.ACLName}}_src !t_{{.ACLName}}_sni
+{{end}}http_access allow t_{{.ACLName}}_src t_{{.ACLName}}_dst CONNECT SSL_ports !v2p_blocked_dst
+http_access allow t_{{.ACLName}}_src t_{{.ACLName}}_dst !CONNECT Safe_ports !v2p_blocked_dst
+{{end}}
+# --- end generated section ---
+{{if .SNI}}ssl_bump splice all
+{{end}}
+# Default deny. Denials are logged with the source IP, mapped back to a tenant
+# host-side, and surfaced as a product surface rather than an error (§9.4).
+http_access deny all
+
+# Reset a denied connection instead of answering it.
+#
+# This is the line that keeps the no-MITM promise true in the one case that
+# would otherwise break it. On a port carrying `ssl-bump`, Squid delivers its
+# own 403 error page INSIDE the tunnel, which means generating a certificate
+# for the host it just refused — the tenant then sees "certificate signed by
+# unknown authority" for a host it was merely not allowed to reach, and the
+# platform has bumped a connection after promising it never would. Observed on
+# the host (design.md §9.4).
+#
+# With TCP_RESET there is no error page, so there is no code path on which this
+# proxy ever presents a certificate. The tenant gets a reset, and the REASON —
+# never requested, awaiting approval, denied, expired — comes from the portal
+# and `citadel egress`, which is where §9.4 puts it anyway.
+deny_info TCP_RESET all
+
+# /dev/stdout is not writable once squid drops to the 'proxy' user and FATALs
+# the daemon; this file is bind-mounted to the host, where the control plane
+# reads and rotates it.
+access_log stdio:/var/log/squid/access.log
+cache_log /var/log/squid/cache.log
+cache deny all
+
+# A CONNECT tunnel outlives the ACL that admitted it: reloading the allowlist
+# after a revocation or an expiry does not close tunnels already open, so a
+# hook holding one open would keep a host the platform no longer grants. The
+# default lifetime is a week; this bounds that window to an hour.
+client_lifetime 1 hour
+
+# A tenant must never see the platform's internals in an error page.
+httpd_suppress_version_string on
+via off
+forwarded_for delete

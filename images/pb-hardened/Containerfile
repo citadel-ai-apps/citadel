@@ -1,0 +1,104 @@
+# pb-hardened:<PB_VERSION>-h<HARDENING_REV>
+#
+# Stage 1 downloads the pinned upstream PocketBase release and verifies it
+# against the checksum COMMITTED in this repo (checksums/). The network is
+# trusted only for the zip, never for the checksum — a mismatch fails the
+# build (design §5).
+#
+# Stage 2 builds pbsnap (cmd/pbsnap) from this repo: the control plane runs it
+# with `docker exec` to copy a live database from INSIDE the gVisor sandbox,
+# because the host must never open one itself (design.md INV-20).
+#
+# Stage 3 is FROM scratch: static PocketBase, pbsnap, CA bundle, nothing else.
+# No shell, no busybox — a hook calling $os.cmd() finds nothing to execute but
+# pbsnap, which reads only the tenant's own pb_data, already readable by its
+# hooks (§5).
+#
+# Built from the REPO ROOT (see the Makefile `image` target), so paths below
+# are relative to it.
+
+# Pinned by digest: the CA bundle in the final image comes from this base, so
+# the base is an input like the PocketBase zip. Bumping it changes the image
+# digest and is a HARDENING_REV bump.
+ARG ALPINE_IMAGE=alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+# pbsnap's toolchain: the same pin as images/rehearse-probe. Declared up here
+# because an ARG used in a FROM must precede the first FROM. Bumping it
+# changes the image digest and is a HARDENING_REV bump.
+ARG GO_IMAGE=golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c
+FROM ${GO_IMAGE} AS pbsnap
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/pbsnap/ ./cmd/pbsnap/
+COPY internal/pbsnap/ ./internal/pbsnap/
+ENV CGO_ENABLED=0
+RUN go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/pbsnap ./cmd/pbsnap \
+ && chmod 0555 /out/pbsnap \
+ && touch -d @0 /out/pbsnap
+
+FROM ${ALPINE_IMAGE} AS builder
+
+ARG PB_VERSION
+ARG TARGETARCH
+
+# curl only, not ca-certificates: the base already ships the bundle
+# (ca-certificates-bundle), fixed by the digest above. An apk upgrade here
+# would make the final image float with the Alpine mirror.
+RUN apk add --no-cache curl
+
+WORKDIR /build
+COPY images/pb-hardened/checksums/pocketbase_${PB_VERSION}_linux_${TARGETARCH}.sha256 ./pinned.sha256
+# Upstream moved off GitHub: releases >= 0.41 live on the new host only, older
+# ones on GitHub only. Try the new host, fall back to GitHub. Either source is
+# safe because the zip must match the checksum pinned in this repo.
+RUN ZIP="pocketbase_${PB_VERSION}_linux_${TARGETARCH}.zip" \
+ && { curl -fsSL -o "$ZIP" "https://ganigeorgiev.com/meta/pocketbase/pocketbase/download/v${PB_VERSION}/$ZIP" \
+   || curl -fsSL -o "$ZIP" "https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/$ZIP"; } \
+ && sha256sum -c pinned.sha256 \
+ && unzip -oq "$ZIP" pocketbase \
+ && chmod 0555 pocketbase
+# The final filesystem is assembled under /rootfs and copied in one go, so
+# every entry, parent directories included, carries the mtime set here rather
+# than the build time. That plus SOURCE_DATE_EPOCH (Makefile) is what makes
+# identical inputs give identical digests. pbsnap goes in here too: a second
+# COPY into /pb in the final stage would rewrite /pb's mtime to the build time
+# in that layer, and every cold build would get a new digest.
+# /pb/pb_data and /pb/app are bind-mount targets; created here because there
+# is no mkdir in a scratch image and the runtime mounts need the mountpoints.
+COPY --from=pbsnap /out/pbsnap ./pbsnap
+RUN mkdir -p /rootfs/pb/pb_data /rootfs/pb/app /rootfs/etc/ssl/certs \
+ && cp pocketbase /rootfs/pb/pocketbase \
+ && cp pbsnap /rootfs/pb/pbsnap \
+ && cp /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ \
+ && chown 10001:10001 /rootfs/pb /rootfs/pb/pb_data /rootfs/pb/app \
+ && find /rootfs -exec touch -h -d @0 {} +
+
+FROM scratch
+
+ARG PB_VERSION
+ARG HARDENING_REV
+ARG PB_SHA256
+
+LABEL org.opencontainers.image.title="pb-hardened" \
+      org.opencontainers.image.description="Hardened PocketBase runtime image (platform-owned; tenant packages never contain the binary)" \
+      io.citadel.pb_version="${PB_VERSION}" \
+      io.citadel.hardening_rev="${HARDENING_REV}" \
+      io.citadel.pb_zip_sha256="${PB_SHA256}"
+
+# The binary, the mountpoints and the CA bundle. The bundle is needed because
+# egress is CONNECT-without-MITM (§9.4) — hooks validate the real origin
+# certificate.
+COPY --from=builder /rootfs/ /
+
+USER 10001:10001
+
+# 0.0.0.0 is correct and safe: the container's only network is its own
+# internal bridge. Flags are platform-owned (§5); no HEALTHCHECK —
+# there is no shell, health is the reconciler's job (§8.3).
+ENTRYPOINT ["/pb/pocketbase", "serve", \
+  "--http=0.0.0.0:8090", \
+  "--dir=/pb/pb_data", \
+  "--hooksDir=/pb/app/pb_hooks", \
+  "--publicDir=/pb/app/pb_public", \
+  "--migrationsDir=/pb/app/pb_migrations", \
+  "--encryptionEnv=PB_ENCRYPTION_KEY"]

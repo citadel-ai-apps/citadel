@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "name": "redteam-egress-probe",
+  "version": "1.0.0",
+  "pocketbase": { "min": "0.38.0", "max": "0.42.x" },
+  "egress": ["example.com"],
+  "healthcheck": { "path": "/api/health", "expectStatus": 200 },
+  "smoke": [
+    { "method": "GET", "path": "/redteam/ping", "expectStatus": 200 }
+  ]
+}

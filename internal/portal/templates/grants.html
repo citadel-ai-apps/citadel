@@ -1,0 +1,60 @@
+{{define "grants.html"}}
+{{template "head" .}}
+<h1>Approvals</h1>
+<p class="sub">Tier-2 requests, and what the platform granted on its own (Tier 1). Deploys never wait on either.</p>
+{{if .Data.Operator}}
+<p class="hint">A Tier-2 decision is made by a named person (INV-16), not by this shared login.
+  Decide on the host: <code>citadel grant approve &lt;id&gt; --justification …</code> or
+  <code>citadel grant deny &lt;id&gt; --reason …</code>.</p>
+{{end}}
+<h2>Waiting</h2>
+{{if .Data.Grants}}
+<table>
+  <thead><tr><th>requested</th><th>project</th><th>kind</th><th>subject</th><th>tier</th><th>by</th><th></th></tr></thead>
+  <tbody>
+  {{range .Data.Grants}}
+    <tr>
+      <td>{{ago .Grant.RequestedAt}}</td>
+      {{/* The operator has no role on most tenants, so their pages are not its to open. */}}
+      <td>{{if $.Data.Operator}}{{.Grant.TenantID}}{{else}}<a href="/t/{{.Grant.TenantID}}">{{.Grant.TenantID}}</a>{{end}}</td>
+      <td>{{label .Grant.Kind}}</td>
+      <td>{{.Grant.Subject}}</td>
+      <td>{{.Grant.Tier}}</td>
+      <td>{{.Grant.RequestedBy}}</td>
+      <td>
+        {{if .Visible}}
+        <code>{{.Grant.ID}}</code>
+        {{else}}
+        <span class="hint">awaiting a platform operator</span>
+        {{end}}
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty">Nothing waiting.</p>
+{{end}}
+<h2>Granted automatically (Tier 1, last 7 days)</h2>
+{{if .Data.Auto}}
+<table>
+  <thead><tr><th>granted</th><th>project</th><th>kind</th><th>subject</th><th>state</th><th>by</th><th>policy</th></tr></thead>
+  <tbody>
+  {{range .Data.Auto}}
+    <tr>
+      <td>{{if .Grant.DecidedAt}}{{ago .Grant.DecidedAt}}{{else}}{{ago .Grant.RequestedAt}}{{end}}</td>
+      <td>{{if $.Data.Operator}}{{.Grant.TenantID}}{{else}}<a href="/t/{{.Grant.TenantID}}">{{.Grant.TenantID}}</a>{{end}}</td>
+      <td>{{label .Grant.Kind}}</td>
+      <td>{{.Grant.Subject}}</td>
+      <td>{{label .State}}</td>
+      <td>{{.Grant.RequestedBy}}</td>
+      <td>{{.Grant.PolicyVersion}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty">Nothing auto-granted recently.</p>
+{{end}}
+{{template "foot" .}}
+{{end}}

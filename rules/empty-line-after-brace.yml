@@ -1,0 +1,29 @@
+id: empty-line-after-opening-brace
+language: go
+severity: error
+message: Missing empty line after opening brace in function, loop, or switch
+note: >
+  Code style requires an empty line after every opening brace in functions,
+  loops, and switches.
+rule:
+  kind: block
+  regex: '^\{\n[^\n}]'
+  all:
+    - any:
+        - inside:
+            kind: function_declaration
+            stopBy: end
+        - inside:
+            kind: method_declaration
+            stopBy: end
+        - inside:
+            kind: func_literal
+            stopBy: end
+    - not:
+        inside:
+          kind: statement_list
+          inside:
+            any:
+              - kind: expression_case
+              - kind: default_case
+              - kind: type_case

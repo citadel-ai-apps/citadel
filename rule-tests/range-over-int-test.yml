@@ -1,0 +1,9 @@
+id: range-over-int
+valid:
+  - "for i := range 20 { use(i) }"
+  - "for i := 0; i < len(a); i++ { i += 2 }"
+  - "for i := 0; i < len(a); i++ { next(a, &i) }"
+  - "for i := 10; i > 0; i-- { use(i) }"
+invalid:
+  - "for i := 0; i < 20; i++ { use(i) }"
+  - "for i := 0; i < len(a); i++ { use(a[i]) }"

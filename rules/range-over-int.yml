@@ -1,0 +1,29 @@
+id: range-over-int
+language: go
+severity: error
+message: Use `for i := range N` instead of a three-clause counting loop
+note: >
+  Go 1.22+ ranges over an integer. `for i := 0; i < N; i++ { ... }` should be
+  written `for i := range N { ... }`, or `for range N { ... }` when the index is
+  unused. Loops that advance or capture the index themselves are exempt: the
+  manual-index argument parsers in cmd/citadel hand `&i` to a helper that skips
+  ahead, and rewriting those would break flag parsing. Loops with a non-zero
+  start, an `i <= N` bound or a stride other than `i++` are out of scope here.
+rule:
+  all:
+    - pattern: |
+        for $I := 0; $I < $N; $I++ {
+          $$$BODY
+        }
+    - not:
+        has:
+          kind: block
+          has:
+            stopBy: end
+            any:
+              - pattern: $I++
+              - pattern: $I--
+              - pattern: $I = $_
+              - pattern: $I += $_
+              - pattern: $I -= $_
+              - pattern: "&$I"

@@ -1,0 +1,30 @@
+id: prefer-new-builtin
+snapshots:
+  func f() { _ = Str("") }:
+    fixed: func f() { _ = new("") }
+    labels:
+    - source: Str("")
+      style: primary
+      start: 15
+      end: 22
+  func f() { _ = store.Int(0) }:
+    fixed: func f() { _ = new(0) }
+    labels:
+    - source: store.Int(0)
+      style: primary
+      start: 15
+      end: 27
+  func f() { _ = store.Str(s) }:
+    fixed: func f() { _ = new(s) }
+    labels:
+    - source: store.Str(s)
+      style: primary
+      start: 15
+      end: 27
+  func f() { _ = store.Time(time.Now()) }:
+    fixed: func f() { _ = new(time.Now()) }
+    labels:
+    - source: store.Time(time.Now())
+      style: primary
+      start: 15
+      end: 37

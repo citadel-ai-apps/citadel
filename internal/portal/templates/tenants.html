@@ -1,0 +1,24 @@
+{{define "tenants.html"}}
+{{template "head" .}}
+<h1>Projects</h1>
+{{if .Data}}
+<table>
+  <thead><tr><th>project</th><th>pocketbase</th><th>state</th><th>your role</th><th>hostname</th></tr></thead>
+  <tbody>
+  {{range .Data}}
+    <tr>
+      <td><a href="/t/{{.Tenant.ID}}">{{.Tenant.Slug}}</a></td>
+      <td>{{.Tenant.RuntimeVersion}}</td>
+      <td><span class="state {{.State}}">{{label .State}}</span></td>
+      <td>{{.Role}}</td>
+      <td><a href="http://{{.Tenant.Hostname}}/">{{.Tenant.Hostname}}</a></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty">No projects yet. An operator provisions one with
+<code>citadel tenant create --slug &lt;name&gt; --pb-version &lt;version&gt; --owner {{.Actor.ID}}</code>.</p>
+{{end}}
+{{template "foot" .}}
+{{end}}

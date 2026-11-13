@@ -1,0 +1,104 @@
+{{define "upgrade.html"}}
+{{template "head" .}}
+{{with .Data}}
+<h1>{{.Tenant.Slug}} · {{.Job.FromVersion}} → {{.Job.ToVersion}}
+  <span class="state {{.Job.State}}">{{label .Job.State}}</span></h1>
+<p class="sub">
+  job {{.Job.ID}} ·
+  started {{ago .Job.CreatedAt}}
+  {{if .Job.FinishedAt}}· finished {{ago .Job.FinishedAt}}{{end}}
+  {{if .Job.Forced}}· forced by the platform (the version you run is end-of-life){{end}}
+</p>
+
+{{if not .Terminal}}
+<!-- Polls while the job is moving and stops the moment it is not: an upgrade
+     takes minutes, and the page it is reported on should not need reloading. -->
+<p class="flash ok" hx-get="/t/{{.Tenant.ID}}/upgrade/{{.Job.ID}}" hx-trigger="every 2s"
+   hx-select="main" hx-target="main" hx-swap="outerHTML">
+  This job is still running ({{label .Job.State}}). The page updates itself.</p>
+{{end}}
+
+<section class="grid">
+  <div class="card">
+    <h2>What happens, in order</h2>
+    <ul class="timeline">
+      <li><strong>rehearse</strong> — boot a copy of your data on {{.Job.ToVersion}}, isolated, and replay smoke requests</li>
+      <li><strong>snapshot</strong> — <code>pre_upgrade</code>, kept 30 days; the only way back</li>
+      <li><strong>apply</strong> — stop, swap image, start; migrations are irreversible</li>
+      <li><strong>verify</strong> — superuser token refresh and smoke requests</li>
+    </ul>
+    {{if .Job.SnapshotID}}<p class="hint">Snapshot taken before anything changed:
+      <code>{{.Job.SnapshotID}}</code></p>{{end}}
+  </div>
+
+  <div class="card">
+    <h2>Rehearsal</h2>
+    {{if .Report}}
+      {{if .Report.Passed}}
+      <p class="flash ok">Passed on {{.Report.TargetVersion}}.</p>
+      {{else}}
+      <p class="flash err">Failed. Nothing was upgraded and no snapshot was taken.</p>
+      {{end}}
+      {{if .Report.Failures}}
+      <ul class="timeline">
+        {{range .Report.Failures}}<li>{{.}}</li>{{end}}
+      </ul>
+      {{end}}
+      {{if .Report.HookErrors}}
+      <h3>Hook errors</h3>
+      <pre>{{range .Report.HookErrors}}{{.}}
+{{end}}</pre>
+      {{end}}
+      {{if .Report.Probe}}
+        {{with .Report.Probe}}
+        {{if .Smoke}}
+        <h3>Smoke requests</h3>
+        <table>
+          <thead><tr><th>request</th><th>expected</th><th>result</th></tr></thead>
+          <tbody>
+          {{range .Smoke}}
+            <tr><td>{{.Method}} {{.Path}}</td><td>{{.Want}}</td>
+                <td>{{if .OK}}ok{{else}}<span class="err">{{.Error}}</span>{{end}}</td></tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{end}}
+        {{if .Egress}}
+        <h3>Isolation</h3>
+        <p class="hint">Every attempt below must fail.</p>
+        <table>
+          <thead><tr><th>target</th><th>reached?</th><th>what happened</th></tr></thead>
+          <tbody>
+          {{range .Egress}}
+            <tr><td>{{.Target}}</td>
+                <td>{{if .Connected}}<span class="err">YES</span>{{else}}no{{end}}</td>
+                <td>{{.Error}}</td></tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{end}}
+        {{end}}
+      {{end}}
+      {{if .Report.Error}}<p class="flash err">{{.Report.Error}}</p>{{end}}
+    {{else if eq .Job.Rehearsal "skipped"}}
+      <p class="flash err">This upgrade was applied without a rehearsal, at an operator's
+      request.</p>
+    {{else}}
+      <p class="empty">No rehearsal report yet.</p>
+    {{end}}
+  </div>
+</section>
+
+{{if .Job.Log}}
+<section class="grid">
+  <div class="card">
+    <h2>Job log</h2>
+    <pre>{{.Job.Log}}</pre>
+  </div>
+</section>
+{{end}}
+
+<p><a href="/t/{{.Tenant.ID}}?tab=runtime">← back to {{.Tenant.Slug}}</a></p>
+{{end}}
+{{template "foot" .}}
+{{end}}

@@ -1,0 +1,126 @@
+# egress-proxy:<SQUID_MAJOR>-r<PROXY_REV>, pushed and scheduled by digest
+# (images/egress-proxy/digests.txt). Also tagged v2p-squid:<MAJOR>-r<REV>
+# locally, for the netprobe scripts that run the proxy by hand.
+#
+# The egress forward proxy (design §9.4), built against a Squid that actually
+# has OpenSSL support.
+#
+# Verified on the development VM: `ubuntu/squid:5.2-22.04_beta`
+# ships Squid 5.9 built WITHOUT --with-openssl, so it rejects `at_step` and the
+# whole `ssl_bump` family:
+#
+#     FATAL: Invalid ACL type 'at_step'
+#
+# A Squid without ssl_bump can only filter the CONNECT target — what the client
+# SAYS it wants — so a hook can CONNECT to an allowlisted host and then
+# negotiate TLS for a different one. That is domain fronting, and it turns a
+# one-host allowlist into "anything the proxy can reach".
+#
+# Alpine's package is built with --with-openssl, --enable-openssl and
+# --enable-ssl-crtd, which is what §9.4's peek-at-step-1 needs. Note what is NOT
+# used even though it is available: `ssl_crtd` generates certificates for
+# BUMPING, and the platform never bumps. `peek` reads the ClientHello and
+# `splice` hands the connection through untouched, so the tenant validates the
+# real origin certificate — no MITM, nothing injected into any container.
+
+# The base is pinned by digest — the multi-arch index, so the same line builds
+# on amd64 and arm64 — because a floating tag changes everything under the
+# proxy between two builds with identical inputs. Bumping it is a PROXY_REV
+# bump.
+# The packages are not pinned: Alpine keeps only the newest build of a package
+# in a stable branch, so a pinned version stops installing at its first
+# security fix. What is scheduled is the BUILT image, by digest, so a rebuild
+# that picks up newer packages is a new digest in digests.txt, chosen on
+# purpose, never a silent change under a running proxy.
+#
+# The build is reproducible: same base digest, same packages, same digest, so
+# `make egress-image` on unchanged inputs adds no line. Three things make that
+# true, and breaking any of them gives a new digest on every build:
+#   - nothing random is generated at build time (the startup certificate is
+#     made by start.sh when the container starts, see below);
+#   - every mtime is pinned (stamp stage) and SOURCE_DATE_EPOCH (Makefile)
+#     pins the config and history timestamps;
+#   - the day-stamped field adduser writes to /etc/shadow is cleared.
+ARG ALPINE_IMAGE=alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+FROM ${ALPINE_IMAGE} AS build
+
+# Platform code, not a sandbox for hostile code: hostile-code assumptions apply to tenant
+# containers. This one keeps a package manager at build time and runs on runc.
+RUN apk add --no-cache squid ca-certificates openssl \
+ && rm -rf /var/cache/apk/*
+
+# Fail the BUILD rather than the fleet if the package ever loses SSL support:
+# the failure mode otherwise is a proxy that starts, filters half as much as it
+# claims to, and says nothing.
+RUN squid -v 2>&1 | grep -q -- '--with-openssl'
+
+# The squid package's pre-install runs adduser, which writes "days since the
+# epoch" as the last-password-change field. Left alone, the digest changes
+# every day. Empty means no password aging, which suits an account with no
+# password anyway.
+RUN sed -i -E 's/^(squid:[^:]*:)[0-9]*:/\1:/' /etc/shadow
+
+# A certificate, and the certificate-generation helper's database.
+#
+# READ THIS BEFORE ASSUMING IT MEANS MITM. Squid refuses to consult `ssl_bump`
+# for a CONNECT unless the listening port carries the `ssl-bump` option, and a
+# port with that option will not start without `tls-cert=` and a working
+# `sslcrtd_program`, even when every ssl_bump rule is `peek`, `splice` or
+# `terminate` and no certificate is ever generated. Verified on the egress
+# host: without them the helper segfaults on the first CONNECT and Squid dies
+# with "sslcrtd_program helpers are crashing too rapidly"; with the port option
+# missing instead, the ssl_bump rules are silently inert and the SNI is not
+# checked at all (design.md §9.4).
+#
+# So the certificate exists to satisfy a startup precondition. It is never
+# presented to a tenant, never injected anywhere, and the design's no-MITM
+# property is testable rather than asserted: a spliced connection to an allowed
+# host validates the REAL origin certificate, which is what
+# test/netprobe/10-sni-mismatch.sh asserts with -verify_return_error. If that
+# check ever passes against a generated certificate, this file is the bug.
+#
+# The certificate is NOT made here: a fresh key per build would make every
+# build a new digest. start.sh generates it under /run (a tmpfs in
+# production) when the container starts, and /etc/squid/bump.pem, the path
+# squid.conf names, is a symlink to it. The empty ssl_db is deterministic, so
+# it stays in the image.
+RUN ln -s /run/squid-bump/bump.pem /etc/squid/bump.pem \
+ && mkdir -p /var/lib/squid \
+ && /usr/lib/squid/security_file_certgen -c -s /var/lib/squid/ssl_db -M 4MB \
+ && chown -R squid:squid /var/lib/squid
+
+# /var/log/squid is bind-mounted from the host so the control plane can read and
+# rotate the access log without execing into this container. Squid drops to uid
+# 31 and opens the log AFTER dropping, so the host directory has to be owned by
+# that uid. internal/egressctl chowns it, offset by the userns-remap base.
+RUN mkdir -p /var/log/squid /var/spool/squid \
+ && chown -R squid:squid /var/log/squid /var/spool/squid
+
+COPY start.sh /usr/local/sbin/v2p-squid
+RUN chmod 0755 /usr/local/sbin/v2p-squid
+
+# Pin every mtime. The build stage's filesystem is copied as a snapshot rather
+# than touched in place: inside a RUN, /etc/hosts, /etc/resolv.conf and /proc
+# are mounts that are not part of the image.
+FROM ${ALPINE_IMAGE} AS stamp
+COPY --from=build / /rootfs/
+RUN find /rootfs -exec touch -h -d @0 {} +
+
+FROM scratch
+COPY --from=stamp /rootfs/ /
+
+# start.sh makes the startup certificate, then execs `squid -N -d 1 "$@"`.
+# -N: no daemonising. The container IS the process, so the reconciler can see it
+# stop (§4: restarts belong to the control plane, not to Docker).
+# -d 1: startup diagnostics to stderr, where `docker logs` finds them.
+#
+# The config path is in CMD rather than ENTRYPOINT so the control plane can
+# point it at a file inside a bind-mounted DIRECTORY. That indirection is not
+# cosmetic: bind-mounting a single file pins the container to that file's
+# INODE, and the generated allowlist is written with the usual
+# write-temp-then-rename, which produces a new inode every time. Mount the file
+# and the container reads the original forever, so a reload re-reads a
+# config that never changes, and the platform enforces an allowlist nobody can
+# see on disk (design.md §9.4).
+ENTRYPOINT ["/usr/local/sbin/v2p-squid"]
+CMD ["-f", "/etc/squid/v2p/squid.conf"]

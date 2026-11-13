@@ -1,0 +1,41 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · citadel</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <meta name="htmx-config" content='{"allowScriptTags":false,"allowEval":false,"includeIndicatorStyles":false,"selfRequestsOnly":true}'>
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/confirm.js" defer></script>
+</head>
+<body>
+<header>
+  <a class="brand" href="/">citadel</a>
+  <nav>
+    <a href="/">projects</a>
+    <a href="/grants">approvals</a>
+    {{if .Operator}}<a href="/attestations">access</a>
+    <a href="/fleet">fleet</a>{{end}}
+  </nav>
+  {{if .Actor.ID}}
+  <form method="post" action="/logout" class="inline">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <span class="who">{{.Actor.ID}}</span>
+    <button type="submit" class="link">sign out</button>
+  </form>
+  {{end}}
+</header>
+<main>
+  {{if .OK}}<p class="flash ok">{{.OK}}</p>{{end}}
+  {{if .Err}}<p class="flash err">{{.Err}}</p>{{end}}
+{{end}}
+
+{{define "foot"}}
+</main>
+<footer>
+  <span>control-plane identity, not your PocketBase</span>
+</footer>
+</body>
+</html>
+{{end}}

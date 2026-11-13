@@ -1,0 +1,35 @@
+id: prefer-new-builtin
+language: go
+severity: error
+message: Use the `new` builtin instead of a pointer helper
+note: >
+  Go 1.26's `new` takes an expression and returns a pointer to a copy of it, so
+  one-line pointer helpers are redundant: write `new(x)` rather than
+  `store.Str(x)`, `store.Int(x)` or `store.Time(x)`. Both the qualified and the
+  package-internal unqualified spellings are flagged. Mind the type when
+  applying the fix by hand: `new` infers from the expression, so a helper that
+  widened its argument (`Int(int32Var)` yielding *int) is not a pure rewrite.
+rule:
+  # tree-sitter cannot tell `pkg.Fn(x)` from a `pkg.Type(x)` conversion, so a
+  # bare `store.Str($X)` pattern parses as a type conversion and never matches.
+  # The expression context forces the call_expression parse.
+  any:
+    - pattern:
+        context: var _ = store.Str($X)
+        selector: call_expression
+    - pattern:
+        context: var _ = store.Int($X)
+        selector: call_expression
+    - pattern:
+        context: var _ = store.Time($X)
+        selector: call_expression
+    - pattern:
+        context: var _ = Str($X)
+        selector: call_expression
+    - pattern:
+        context: var _ = Int($X)
+        selector: call_expression
+    - pattern:
+        context: var _ = Time($X)
+        selector: call_expression
+fix: new($X)

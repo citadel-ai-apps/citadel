@@ -1,0 +1,62 @@
+# edge-caddy:<CADDY_VERSION>-r<RATELIMIT_REV>
+#
+# Caddy with the rate-limit module compiled in (design §10: per-tenant rate
+# limits, separately for /api/ and /_/).
+#
+# Stock caddy:2 has no rate_limit handler and rejects a whole route that names
+# one, so without this image the platform publishes routes with the limits
+# quietly dropped. internal/proxyctl reports that as drift rather than hiding
+# it, but the fix is here: build this, push it by digest, and point
+# `edge_image` at the digest.
+#
+# Unlike pb-hardened this is PLATFORM code, not a sandbox for hostile code, so
+# it keeps its shell and its upstream base image. Hostile code lives in tenant
+# containers; the edge is trusted infrastructure that terminates ingress.
+
+# A full semver: xcaddy rejects "v2.10" with "invalid semantic version".
+ARG CADDY_VERSION=2.10.2
+# Both bases pinned by digest: a floating Go patch release changes the binary,
+# a floating caddy base changes everything under it. Bumping either changes
+# the image digest and is a RATELIMIT_REV bump. CADDY_BASE has to move with
+# CADDY_VERSION.
+ARG GO_IMAGE=golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c
+ARG CADDY_BASE=caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+
+FROM ${GO_IMAGE} AS builder
+
+ARG CADDY_VERSION
+# Pinned, not "latest": the edge is scheduled by digest like everything else
+#, and a floating module version would make the same inputs produce a
+# different binary.
+ARG RATELIMIT_VERSION=v0.1.0
+
+RUN apk add --no-cache git ca-certificates
+ARG XCADDY_VERSION=v0.4.7
+RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}
+
+# CGO off for the same reason the control plane builds that way: one static
+# binary, no libc to match against the runtime base.
+ENV CGO_ENABLED=0
+RUN xcaddy build "v${CADDY_VERSION}" \
+      --with github.com/mholt/caddy-ratelimit@${RATELIMIT_VERSION} \
+      --output /rootfs/usr/bin/caddy
+
+# Fail the build rather than the fleet if the module did not make it in: a
+# missing rate limiter that only shows up as a rejected route at 3am is the
+# outcome this whole file exists to avoid. Checked here, not in the final
+# stage: a RUN there adds a layer that bumps the mtime of /etc and changes
+# the digest on every build. The binary is static, so the check holds for it.
+RUN /rootfs/usr/bin/caddy list-modules | grep -q '^http.handlers.rate_limit$'
+
+# Pin every mtime, the usr/ and usr/bin/ directories included: COPYing a lone
+# file into the base's /usr/bin would stamp that directory with the build
+# time. Together with SOURCE_DATE_EPOCH (Makefile) this keeps the digest a
+# function of the inputs.
+RUN find /rootfs -exec touch -h -d @0 {} +
+
+FROM ${CADDY_BASE}
+
+# Replace the stock binary with the one that has the module. Everything else
+# about the image — entrypoint, config paths, the caddy user — is unchanged,
+# so internal/proxyctl drives it exactly as it drives caddy:2.
+COPY --from=builder /rootfs/ /

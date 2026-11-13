@@ -1,0 +1,109 @@
+{{define "attestations.html"}}
+{{template "head" .}}
+<h1>Access</h1>
+
+<section class="card">
+  <h2>Audit chain</h2>
+  <p>Head anchored at seq {{.Data.AnchoredSeq}}, {{.Data.AnchorAge}} ago.</p>
+</section>
+
+<section class="card">
+  <h2>Attestation mismatches</h2>
+  {{if .Data.Mismatches}}
+  <table>
+    <thead><tr><th>project</th><th>outcome</th><th>generated</th><th>findings</th></tr></thead>
+    <tbody>
+    {{range .Data.Mismatches}}
+      <tr class="{{if eq .Outcome $.Data.EnforcementNote}}bad{{end}}">
+        <td>{{.TenantID}}</td>
+        <td>{{label .Outcome}}</td>
+        <td>{{ago .GeneratedAt}}</td>
+        <td><pre class="small">{{.MismatchJSON}}</pre></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  <p class="hint">Missing rules are repaired automatically; extra rules are never removed.</p>
+  {{else}}
+  <p class="empty">Every tenant's host matches its grants.</p>
+  {{end}}
+</section>
+
+<section class="card">
+  <h2>Projects</h2>
+  <p class="hint">A re-check needs no role on the project and opens none of its pages.
+    Break-glass is opened by a named person (INV-16), on the host:
+    <code>citadel breakglass open &lt;slug&gt; --reason …</code>.</p>
+  {{if .Data.Projects}}
+  <table>
+    <thead><tr><th>project</th><th>last attestation</th><th>break-glass</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.Projects}}
+      <tr{{if .BreakGlass}} class="bad"{{end}}>
+        <td>{{.Tenant.Slug}}</td>
+        <td>{{if .Outcome}}{{label .Outcome}} · {{ago .Attested}}{{else}}<span class="hint">never</span>{{end}}</td>
+        <td>{{if .BreakGlass}}open now{{else}}—{{end}}</td>
+        <td>
+          <form method="post" action="/attestations/{{.Tenant.ID}}/check" class="inline">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit">Re-check from the host</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="empty">No projects.</p>
+  {{end}}
+</section>
+
+<section class="card">
+  <h2>Break-glass</h2>
+  {{if .Data.BreakGlassOpen}}
+  <h3>Open right now</h3>
+  <ul>
+    {{range .Data.BreakGlassOpen}}
+    <li>{{.TenantID}} · {{.Subject}} · opened by {{.RequestedBy}} ·
+        expires {{stamp .ExpiresAt}}<br><span class="hint">{{.Justification}}</span></li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="empty">No open sessions.</p>
+  {{end}}
+
+  {{if .Data.BreakGlassLate}}
+  <h3>Past the 24h review</h3>
+  <p class="hint">The opener cannot open another until someone else reviews these, on the host:
+    <code>citadel breakglass review &lt;id&gt; --outcome justified|unjustified --notes …</code>.</p>
+  <table>
+    <thead><tr><th>grant</th><th>project</th><th>opened by</th><th>when</th><th>reason</th></tr></thead>
+    <tbody>
+    {{range .Data.BreakGlassLate}}
+      <tr>
+        <td><code>{{.ID}}</code></td>
+        <td>{{.TenantID}}</td>
+        <td>{{.RequestedBy}}</td>
+        <td>{{ago .RequestedAt}}</td>
+        <td>{{.Justification}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+
+<section class="card">
+  <h2>Notices</h2>
+  {{if .Data.Notices}}
+  <ul class="feed">
+    {{range .Data.Notices}}
+    <li><span class="hint">{{ago .CreatedAt}}</span> · {{label .Kind}} · {{.Body}}</li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="empty">Nothing to report.</p>
+  {{end}}
+</section>
+{{template "foot" .}}
+{{end}}

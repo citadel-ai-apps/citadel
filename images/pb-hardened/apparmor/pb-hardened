@@ -1,0 +1,53 @@
+#include <tunables/global>
+
+# Platform AppArmor profile for tenant PocketBase containers (design §5).
+# docker-default shape, tightened: write+lock is granted ONLY under /pb/pb_data
+# (bind mount) and /tmp (tmpfs); everything else is read-only by omission, and
+# /pb/app plus the binary carry explicit deny-write on top of the :ro mount
+#. NOTE: AppArmor deny rules beat allow rules, so writes are
+# constrained by granting narrowly, not by a blanket deny.
+#
+# Load:    apparmor_parser -Kr images/pb-hardened/apparmor/pb-hardened
+# Apply:   --security-opt apparmor=pb-hardened
+# See ../README.md for the runsc / kernel-support caveats.
+
+profile pb-hardened flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network inet tcp,
+  network inet udp,
+  network inet6 tcp,
+  network inet6 udp,
+  network unix,
+
+  deny network raw,
+  deny network packet,
+
+  # Read everywhere (the rootfs is read-only anyway); execute only PocketBase.
+  /** r,
+  /pb/pocketbase mrix,
+
+  # The only writable paths. `k` = file locking, which SQLite requires.
+  /pb/pb_data/ rw,
+  /pb/pb_data/** rwk,
+  /tmp/ rw,
+  /tmp/** rwk,
+
+  # Explicit denies on the app mount and the binary (deny wins over the grants above).
+  deny /pb/app/** wlk,
+  deny /pb/pocketbase wl,
+
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/kcore rwklx,
+  deny @{PROC}/sys/** w,
+  deny /sys/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+
+  deny mount,
+  deny umount,
+
+  # No capabilities and no tracing: cap-drop ALL at runtime, enforced here too.
+  deny capability,
+  deny ptrace,
+}

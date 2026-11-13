@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "name": "pkg-badhooks",
+  "version": "1.0.0",
+  "pocketbase": { "min": "0.22.0" },
+  "healthcheck": { "path": "/api/health", "expectStatus": 200 },
+  "smoke": [
+    { "method": "GET", "path": "/fixture/ping", "expectStatus": 200 }
+  ]
+}

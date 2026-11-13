@@ -1,0 +1,22 @@
+# `<version> h<rev> <arch> <digest-ref>` — the hand-off from `make image` to
+# runtime_version.image_digest (design §5). Append-only; the control
+# plane resolves the LAST matching line for a (version, rev, arch).
+#
+# Builds are reproducible: the base image is pinned by digest and every
+# timestamp is fixed (SOURCE_DATE_EPOCH=0), so rebuilding a (version, rev,
+# arch) gives the same digest and `make image` adds no line. A new line for an
+# existing (version, rev, arch) means an input changed without a rev bump.
+0.22.55 h1 arm64 127.0.0.1:5000/pb-hardened@sha256:9cba095d228db0841f58041de0547681d56cc8d2483521ab506e849830971549
+0.38.2 h1 arm64 127.0.0.1:5000/pb-hardened@sha256:3df9475c7bf9546b46a47ed94f47b7bb5e40f1bd3e2f0e7fb275d38a24831ad6
+0.40.4 h1 arm64 127.0.0.1:5000/pb-hardened@sha256:5775af15f5c4db63a9175340339d840fd4061187774e29db8c959c08923c0bfa
+0.41.1 h1 arm64 127.0.0.1:5000/pb-hardened@sha256:dfaadbda48fa85361126e3875676814b57d91e4b5adb168c5f21f57487dde465
+0.22.55 h2 arm64 127.0.0.1:5000/pb-hardened@sha256:618318f499ad5a62d0410918499e8e156e731e2cc8773cca4433c6a284db7acd
+0.38.2 h2 arm64 127.0.0.1:5000/pb-hardened@sha256:8e5d30c8f10350128b4cb3767f933482224b1d1bfdabf618ffc052a88974c619
+0.40.4 h2 arm64 127.0.0.1:5000/pb-hardened@sha256:6e49156683a5102b96838ff7e0addd91cc0ee70abde389abdc0be5b320fa1b70
+0.41.1 h2 arm64 127.0.0.1:5000/pb-hardened@sha256:33e3c69579c19765c6e169e5f2c87fcbfa3241c5f2447b07421471db368d0340
+0.42.2 h2 arm64 127.0.0.1:5000/pb-hardened@sha256:31b917d7b0a94695d6bfc603a3adce5f2f913ad742202d931b25bb282974ed47
+0.22.55 h2 amd64 127.0.0.1:5000/pb-hardened@sha256:73a5fe67c0ba101da41ebe9d4f9cee19c58ff87c0bd0a5fcefd233fd63cc3917
+0.38.2 h2 amd64 127.0.0.1:5000/pb-hardened@sha256:3c26af8d62d757554a0497739bfe3da8d5851f7143523c0dc60f874763881778
+0.40.4 h2 amd64 127.0.0.1:5000/pb-hardened@sha256:a164be8a23e4a752c010dbdbfa38402c1bcb3624a2869d1e4624ceca43ad0c73
+0.41.1 h2 amd64 127.0.0.1:5000/pb-hardened@sha256:0b1b7eb7956b75e33bae9017b3418f24f661864a91a0b180710072b4e507c438
+0.42.2 h2 amd64 127.0.0.1:5000/pb-hardened@sha256:501371c40d538d4bb9cdc732c80a9a724d85065691e1299607cc12b9d72741a6

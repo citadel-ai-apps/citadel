@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "name": "pkg-pinned",
+  "version": "1.0.0",
+  "pocketbase": { "min": "0.22.0", "max": "0.38.x" },
+  "healthcheck": { "path": "/api/health", "expectStatus": 200 },
+  "smoke": [
+    { "method": "GET", "path": "/fixture/ping", "expectStatus": 200 }
+  ]
+}

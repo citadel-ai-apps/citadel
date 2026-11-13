@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "name": "pkg-egress-tier0",
+  "version": "1.0.0",
+  "pocketbase": { "min": "0.38.0", "max": "0.42.x" },
+  "egress": ["169.254.169.254"],
+  "healthcheck": { "path": "/api/health", "expectStatus": 200 }
+}

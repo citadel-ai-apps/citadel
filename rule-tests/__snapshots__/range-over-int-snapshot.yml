@@ -1,0 +1,14 @@
+id: range-over-int
+snapshots:
+  for i := 0; i < 20; i++ { use(i) }:
+    labels:
+    - source: for i := 0; i < 20; i++ { use(i) }
+      style: primary
+      start: 0
+      end: 34
+  for i := 0; i < len(a); i++ { use(a[i]) }:
+    labels:
+    - source: for i := 0; i < len(a); i++ { use(a[i]) }
+      style: primary
+      start: 0
+      end: 41

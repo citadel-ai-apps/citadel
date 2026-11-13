@@ -1,0 +1,94 @@
+{{define "fleet.html"}}
+{{template "head" .}}
+{{with .Data}}
+<h1>Fleet</h1>
+
+{{if .Drift}}
+<section class="grid">
+  <div class="card">
+    <h2>Drift</h2>
+    <p class="hint">Security first, then oldest. Not auto-repaired.</p>
+    <table>
+      <thead><tr><th>kind</th><th>tenant</th><th>detail</th><th>seen</th></tr></thead>
+      <tbody>
+      {{range .Drift}}
+        <tr class="{{if .Security}}err{{end}}">
+          <td>{{.Kind}}</td><td>{{.TenantID}}</td><td>{{.Detail}}</td><td>{{ago .DetectedAt}}</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+</section>
+{{end}}
+
+<section class="grid">
+  <div class="card">
+    <h2>Versions</h2>
+    <table>
+      <thead><tr><th>version</th><th>state</th><th>eol</th><th>tenants</th></tr></thead>
+      <tbody>
+      {{$on := .OnVersion}}
+      {{range .Versions}}
+        <tr class="{{if eq .State "eol"}}err{{end}}">
+          <td>{{.Version}}</td><td>{{label .State}}</td>
+          <td>{{if .EOLAt}}{{stamp .EOLAt}}{{else}}—{{end}}</td>
+          <td>{{len (index $on .Version)}}{{with index $on .Version}} · {{range .}}{{.}} {{end}}{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Upgrades in flight</h2>
+    {{if .Active}}
+    <table>
+      <thead><tr><th>job</th><th>tenant</th><th>from → to</th><th>state</th><th>started</th></tr></thead>
+      <tbody>
+      {{range .Active}}
+        <tr><td>{{.ID}}</td><td>{{.TenantID}}</td><td>{{.FromVersion}} → {{.ToVersion}}</td>
+            <td>{{label .State}}</td><td>{{ago .CreatedAt}}</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}<p class="empty">Nothing running.</p>{{end}}
+
+    <h3>Failed rehearsals, last 7 days</h3>
+    {{if .Failed}}
+    <table>
+      <thead><tr><th>tenant</th><th>to</th><th>forced</th><th>why</th></tr></thead>
+      <tbody>
+      {{range .Failed}}
+        <tr><td>{{.TenantID}}</td><td>{{.ToVersion}}</td>
+            <td>{{if .Forced}}yes{{else}}no{{end}}</td><td>{{.Log}}</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}<p class="empty">None.</p>{{end}}
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h2>Backups</h2>
+    <table>
+      <thead><tr><th>tenant</th><th>last routine snapshot</th></tr></thead>
+      <tbody>
+      {{range .Backups}}
+        <tr class="{{if .Stale}}err{{end}}"><td>{{.Tenant}}</td><td>{{.Last}}</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <h3>Last retention sweep</h3>
+    {{if .Sweep}}
+    <dl>
+      <dt>deleted</dt><dd>{{.Sweep.Deleted}} ({{bytes .Sweep.Bytes}})</dd>
+      <dt>kept past retention</dt><dd>{{.Sweep.Kept}}</dd>
+      <dt>errors</dt><dd>{{len .Sweep.Errors}}</dd>
+    </dl>
+    {{else}}<p class="empty">No sweep since this process started.</p>{{end}}
+  </div>
+</section>
+{{end}}
+{{template "foot" .}}
+{{end}}

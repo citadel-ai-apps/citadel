@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "name": "pkg-egress-tier2",
+  "version": "1.0.0",
+  "pocketbase": { "min": "0.38.0", "max": "0.42.x" },
+  "egress": ["api.stripe.com", "*.slack.com"],
+  "healthcheck": { "path": "/api/health", "expectStatus": 200 },
+  "smoke": [{ "method": "GET", "path": "/fixture/ping", "expectStatus": 200 }]
+}

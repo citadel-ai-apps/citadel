@@ -1,0 +1,12 @@
+id: empty-line-after-switch-brace
+language: go
+severity: error
+message: Missing empty line after opening brace in switch statement
+note: >
+  Code style requires an empty line after every opening brace in switch
+  statements.
+rule:
+  any:
+    - kind: expression_switch_statement
+    - kind: type_switch_statement
+  regex: '^switch[^{]*\{\n[^\n}]'

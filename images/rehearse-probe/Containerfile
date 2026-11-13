@@ -1,0 +1,46 @@
+# rehearse-probe:<REV>
+#
+# The probe container of design §12. One static binary, FROM scratch.
+#
+# It exists because the control plane cannot reach a rehearsal from the host: a
+# rehearsal bridge matches `br-t-+` on purpose — the rehearsal runs the tenant's
+# own hooks and must not get the container→host path that wildcard closes — and
+# the host-protection INPUT drop also kills the SYN-ACK of a host-initiated
+# connection (design.md §9.3). So the health and smoke requests have to
+# come from a container ON the rehearsal network.
+#
+# FROM scratch, with no shell and no CA bundle, is not minimalism for its own
+# sake. This container sits on a network with a rehearsal of hostile tenant code
+# and its whole job is to prove that network reaches nothing: a shell in it
+# would be an interactive foothold one `docker exec` away from the thing being
+# tested, and a CA bundle would imply an outbound TLS path it must not have.
+# It speaks plaintext HTTP to a private address on an internal bridge.
+
+# Pinned by digest: a floating Go patch release changes the binary. Bumping
+# it changes the image digest and is a PROBE_REV bump.
+ARG GO_IMAGE=golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c
+
+FROM ${GO_IMAGE} AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+
+# Static, stripped, reproducible: the control plane schedules this by digest
+# like every other image, so the same inputs must produce the same bytes. The
+# mtime is pinned too, together with SOURCE_DATE_EPOCH (Makefile).
+ENV CGO_ENABLED=0
+RUN go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/pbprobe ./cmd/pbprobe \
+ && touch -d @0 /out/pbprobe
+
+FROM scratch
+
+COPY --from=builder /out/pbprobe /pbprobe
+
+# Runs as a non-root numeric UID. There is no /etc/passwd to name, which is
+# fine: nothing in this image looks one up.
+USER 10001:10001
+
+ENTRYPOINT ["/pbprobe"]

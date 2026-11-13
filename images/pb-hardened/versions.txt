@@ -1,0 +1,9 @@
+# Supported PocketBase versions — the `make image-matrix` input (design §5).
+# One version per line; comments and blank lines ignored.
+# Every listed version needs a committed checksums/pocketbase_<ver>_linux_<arch>.sha256
+# (add one with fetch-checksum.sh <version>).
+0.22.55
+0.38.2
+0.40.4
+0.41.1
+0.42.2

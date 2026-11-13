@@ -1,0 +1,83 @@
+Citadel
+Copyright 2026 Marco Manfrini and Luca Zanconato
+
+Licensed under the Functional Source License, Version 1.1, ALv2 Future
+License (FSL-1.1-ALv2). See LICENSE.
+
+-------------------------------------------------------------------------------
+Third-party Go modules compiled into the Citadel binaries
+-------------------------------------------------------------------------------
+
+Apache License 2.0:
+  github.com/containerd/errdefs
+  github.com/distribution/reference
+  github.com/docker/docker
+  github.com/docker/go-connections
+  github.com/docker/go-units
+  github.com/go-logr/logr
+  github.com/go-logr/stdr
+  github.com/moby/docker-image-spec
+  github.com/opencontainers/go-digest
+  github.com/opencontainers/image-spec
+  github.com/puzpuzpuz/xsync/v3
+  go.opentelemetry.io/auto/sdk
+  go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp
+  go.opentelemetry.io/otel (incl. metric, trace)
+
+BSD-style:
+  github.com/google/uuid
+  github.com/gorilla/mux
+  github.com/pkg/errors
+  github.com/remyoudompheng/bigfft
+  github.com/tmthrgd/go-hex
+  github.com/uptrace/bun (incl. dialect/sqlitedialect)
+  github.com/vmihailenco/msgpack/v5
+  github.com/vmihailenco/tagparser/v2
+  golang.org/x/crypto
+  golang.org/x/net (publicsuffix)
+  golang.org/x/sys
+  modernc.org/libc, mathutil, memory, sqlite
+
+MIT:
+  github.com/cespare/xxhash/v2
+  github.com/dustin/go-humanize
+  github.com/felixge/httpsnoop
+  github.com/jinzhu/inflection
+  github.com/mattn/go-isatty
+  github.com/ncruces/go-strftime
+
+The NOTICE file of github.com/docker/docker is reproduced below:
+
+  Docker
+  Copyright 2012-2017 Docker, Inc.
+
+  This product includes software developed at Docker, Inc. (https://www.docker.com).
+
+  This product contains software (https://github.com/creack/pty) developed
+  by Keith Rarick, licensed under the MIT License.
+
+  The following is courtesy of our legal counsel:
+
+  Use and transfer of Docker may be subject to certain restrictions by the
+  United States and other governments.
+  It is your responsibility to ensure that your use and/or transfer does not
+  violate applicable laws.
+
+  For more information, please see https://www.bis.doc.gov
+
+  See also https://www.apache.org/dev/crypto.html and/or seek legal counsel.
+
+-------------------------------------------------------------------------------
+Container images
+-------------------------------------------------------------------------------
+
+The images built from images/ and deploy/ bundle separate, unmodified
+third-party programs, each distributed under its own license:
+
+  Caddy, caddy-ratelimit  Apache License 2.0   (images/edge-caddy)
+  PocketBase              MIT                  (images/pb-hardened)
+  Squid                   GPL-2.0-or-later     (images/egress-proxy)
+  zot                     Apache License 2.0   (deploy/registry)
+  Alpine Linux packages   various              (base images)
+
+These programs are not part of the Software covered by LICENSE.

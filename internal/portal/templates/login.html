@@ -1,0 +1,25 @@
+{{define "login.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · citadel</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="centred">
+<form method="post" action="/login" class="card">
+  <h1>citadel</h1>
+  {{if .Err}}<p class="flash err">{{.Err}}</p>{{end}}
+  <label>Principal
+    <input name="principal" autocomplete="username" autofocus placeholder="person:alice" required>
+  </label>
+  <label>Password
+    <input name="password" type="password" autocomplete="current-password" required>
+  </label>
+  <input type="hidden" name="next" value="{{.Data.Next}}">
+  <button type="submit">Sign in</button>
+  <p class="hint">Also opens your app's PocketBase admin; there is no separate password.</p>
+</form>
+</body>
+</html>
+{{end}}

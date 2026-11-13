@@ -1,0 +1,12 @@
+id: unmarshal-tag-is-dash
+language: go
+severity: error
+message: Struct field can be decoded with the `-` key because the JSON tag
+  starts with a `-` but is followed by a comma.
+rule:
+  pattern: "`$TAG`"
+  inside:
+    kind: field_declaration
+constraints:
+  TAG:
+    regex: json:"-,.*"

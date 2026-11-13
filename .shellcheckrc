@@ -1,0 +1,13 @@
+# Read by `make lint` (and editors). Follow `source`d files relative to the
+# script that sources them, so helpers in lib.sh / resolve.sh are checked too.
+external-sources=true
+source-path=SCRIPTDIR
+
+# SC2329 "function is never invoked": helpers here are mostly called by name
+# through check / expect_ok / expect_err "<desc>" fn, or from trap, which
+# shellcheck cannot see. Leaving it on would mean a directive on every helper.
+disable=SC2329
+
+# SC2001 "use ${var//search/replace}": the hits indent every line of a
+# multi-line value (sed 's/^/    /'), which parameter expansion cannot do.
+disable=SC2001

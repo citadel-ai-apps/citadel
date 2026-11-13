@@ -1,0 +1,11 @@
+id: prefer-new-builtin
+valid:
+  - "func f() { _ = new(x) }"
+  - "func f() { _ = store.Str(a, b) }"
+  - "func f() { _ = other.Str(a) }"
+  - "func f() { _ = rand.Int() }"
+invalid:
+  - "func f() { _ = store.Str(s) }"
+  - "func f() { _ = store.Int(0) }"
+  - "func f() { _ = store.Time(time.Now()) }"
+  - "func f() { _ = Str(\"\") }"
