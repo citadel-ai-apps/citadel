@@ -93,8 +93,8 @@ UTM quirks the scripts work around:
 PB_VM_HOST=10.0.0.5 make accept-controlplane
 ```
 
-Only the `vm-create`, `vm-up`, `vm-down`, `vm-status`, `vm-doctor` and `vm-ssh` targets are
-UTM-specific.
+Only the `vm-create`, `vm-up`, `vm-down`, `vm-status` and `vm-doctor` targets are
+UTM-specific; `vm-ssh` goes through `in-vm.sh` and works with `PB_VM_HOST` too.
 
 ## Environment
 
@@ -110,7 +110,8 @@ UTM-specific.
 | `PB_VM_CPUS` | `4` | cores, at creation |
 | `PB_VM_MEM_MIB` | `8192` | RAM, at creation |
 | `PB_VM_DISK_GIB` | `64` | disk, at creation |
-| `PB_VM_DNS` | detected | resolver for the daemon |
+| `PB_VM_DNS` | detected | resolver Docker gives containers |
+| `PB_VM_CACHE` | `~/Library/Caches/citadel` | where the Ubuntu image is downloaded |
 
 The base image is pinned in `ubuntu-image.conf` by dated serial and checksum. Run
 `make check` before committing a newer one.

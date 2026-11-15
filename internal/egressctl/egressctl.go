@@ -759,7 +759,7 @@ func (c *Controller) staleReason(ctx context.Context, insp container.InspectResp
 
 		return fmt.Sprintf("running image %s, want %s", insp.Config.Image, c.cfg.EgressProxyImage)
 	}
-	// The tag is not the image. `make egress-image` rebuilds v2p-squid:6-r2 in
+	// The tag is not the image. `make egress-image` rebuilds v2p-squid:6-r3 in
 	// place, so a tag comparison says "unchanged" while the container runs the
 	// previous build — which is how a fixed configuration bug survives its own
 	// fix. Compare the resolved ID, as the tenant driver does.

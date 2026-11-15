@@ -27,9 +27,9 @@ authorised what.
   and deployed through a ladder: snapshot, swap, health-check, smoke replay. A
   failure at any step rolls back code *and* data. Packages can be deployed from
   the CLI, the portal, or a CI token.
-- **Hardened images by digest.** Images are built `FROM scratch` against a
-  committed upstream checksum, reproducibly, and scheduled by digest, never by
-  tag.
+- **Hardened images by digest.** The PocketBase image is built `FROM scratch`
+  against a committed upstream checksum. Every image is built reproducibly by one
+  pinned builder and scheduled by digest, never by tag.
 - **A reconciler that alerts instead of fighting.** It converges containers,
   networks and firewall rules every few seconds. Where converging would be
   dangerous (an image mismatch, a rule with no grant behind it) it raises drift
@@ -59,7 +59,7 @@ in [docs/design.md](docs/design.md#1-invariants--read-first).
 
 | | |
 |---|---|
-| `cmd/` | the control-plane daemon, the operator CLI, and the rehearsal probe |
+| `cmd/` | the control-plane daemon, the operator CLI, the rehearsal probe, and `pbsnap` (the in-sandbox live-backup helper shipped in the PocketBase image) |
 | `internal/` | reconciler, driver, network policy, grants, audit, packages, portal |
 | `images/` | the hardened PocketBase image, the edge proxy, the egress proxy, the probe |
 | `deploy/` | supporting service configuration |
@@ -77,7 +77,7 @@ development that is a **UTM** VM on a stock Ubuntu kernel, because the guarantee
 are kernel guarantees. Go binaries cross-compile on the Mac, and `hack/in-vm.sh`
 syncs the tree into the guest and runs commands there as root.
 
-**Prerequisites:** Go (see `go.mod`), `make`, [UTM](https://mac.getutm.app)
+**Prerequisites:** Go (see `go.mod`), `make`, `python3`, [UTM](https://mac.getutm.app)
 (`brew install --cask utm`), `ast-grep` (`brew install ast-grep`) and
 `shellcheck` (`brew install shellcheck`).
 
@@ -96,7 +96,8 @@ user-namespace remapping rebuilds the image store. Re-run `images-all` whenever
 an image needs rebuilding. Builds append to `images/*/digests.txt`, which
 `in-vm.sh` copies back to the Mac. These files hand the images over to the control
 plane, which schedules **digests, never tags**. `PB_FROM`/`PB_TO` in the Makefile
-name the version pair the upgrade suite uses.
+name the version pair `images-all` builds for the upgrade suite, which keeps
+matching defaults of its own in `test/acceptance/upgrade.sh`.
 
 See [hack/vm/README.md](hack/vm/README.md) for VM details and environment
 variables.
@@ -135,9 +136,9 @@ and `make probe-image` append to. All three build in the VM and push to the loca
 registry:
 
 ```sh
-hack/in-vm.sh make edge-image     # EDGE IMAGE DIGEST: 127.0.0.1:5000/edge-caddy@sha256:…
-hack/in-vm.sh make egress-image   # EGRESS PROXY IMAGE DIGEST: 127.0.0.1:5000/egress-proxy@sha256:…
-hack/in-vm.sh make probe-image    # PROBE IMAGE DIGEST: 127.0.0.1:5000/rehearse-probe@sha256:…
+hack/in-vm.sh make edge-image     # IMAGE DIGEST: 127.0.0.1:5000/edge-caddy@sha256:…
+hack/in-vm.sh make egress-image   # EGRESS PROXY IMAGE DIGEST: 127.0.0.1:5000/egress-proxy@sha256:… (squid …)
+hack/in-vm.sh make probe-image    # IMAGE DIGEST: 127.0.0.1:5000/rehearse-probe@sha256:…
 ```
 
 The digests files are resolved relative to the daemon's working directory (the
@@ -145,12 +146,14 @@ repo root in development). On a host where nothing has been built, the daemon
 falls back to the unpinned tags `caddy:2` (no rate_limit handler, so the fleet view
 reports `rate_limit` drift) and `v2p-squid:6-r3`, and logs a warning naming the
 build that fixes it. The probe has no fallback: without one, upgrades cannot be
-rehearsed, and the daemon warns about that too. A tag set explicitly in the config is refused unless
-`allow_unpinned_images` is set. A container running a different image is recreated
-on the next tick.
+rehearsed, and the daemon warns about that too. An edge or egress tag set explicitly
+in the config is refused unless `allow_unpinned_images` is set; a `probe_image` tag
+is always refused. A container running a different image is recreated on the next
+tick.
 
 - **Config defaults** describe a single-host install, so a config only lists what
-  differs.
+  differs. Every key, its default and its meaning is in
+  [`internal/config/config.go`](internal/config/config.go).
 - **The portal** binds to `127.0.0.1:8080` unless `portal_allow_public` is set.
   Binding a public address is fine in the dev VM because tenants cannot reach the
   host, but production needs a management interface. The portal speaks plain HTTP.
@@ -158,16 +161,26 @@ on the next tick.
   `Secure` and `__Host-`-prefixed. Signing out or changing a password ends every
   portal session that principal holds. Failed logins are throttled per principal and per
   address.
-- **`--seed-digests`** registers every version listed in a `digests.txt`.
+- **`--seed-digests`** registers every version listed in a `digests.txt` whose
+  architecture and hardening rev match the config's.
 - **Other flags:** `--log-level debug`, and `--once` for a single tick.
-- **Startup checks:** the daemon refuses to start when it is not root, the firewall
-  backend is not `iptables`, `runsc` is missing, or the `userns_remap` setting
-  disagrees with the host.
+- **Startup checks:** the daemon refuses to start when:
+  - it is not root;
+  - the config is invalid (for example, `tenant_runtime` is not `runsc`);
+  - Docker is unreachable;
+  - Docker reports a firewall backend other than `iptables` (an engine that
+    reports none is accepted);
+  - dockerd runs with `--ip-forward-no-drop`;
+  - `runsc` is missing;
+  - the `userns_remap` setting disagrees with the host;
+  - `pb_root`, or the tenant, scratch or backup directories, sit on a network
+    filesystem.
 
 ### Provisioning a tenant
 
-`citadel` talks to the root-only unix socket. Every mutation is attributed, and the
-default principal comes from `SUDO_USER`, so create it first:
+`citadel` talks to the root-only unix socket. Every mutation is attributed. The
+default principal is `$CITADEL_PRINCIPAL`, else `person:` plus the first of
+`SUDO_USER`, `USER` and `LOGNAME` that is set and is not `root`, so create it first:
 
 ```sh
 hack/in-vm.sh bin/citadel principal create person:ubuntu --name dev
@@ -210,8 +223,8 @@ the edge hands it to the admin UI. It never calls the instance's API.
 ### The operator console
 
 `citadel` is the complete surface. Run it with no arguments to list every command.
-Add `--json` for raw output, or `--socket` to use a different socket. Start any
-investigation with:
+Add `--json` for raw output, or `--socket` (or `CITADEL_SOCKET`) to use a different
+socket. Start any investigation with:
 
 ```sh
 hack/in-vm.sh bin/citadel fleet                # drift, denials, quarantines, chain head, anchor age
@@ -251,8 +264,9 @@ hack/in-vm.sh bin/citadel breakglass close <grant-id> --as person:alice
 
 ### The tenant portal
 
-The portal is one listener, enabled whenever `portal_addr` is set. A tenant
-appears for any principal with a role on it. Set a password and open
+The portal is one listener on `portal_addr`, which defaults to `127.0.0.1:8080`, so
+it is on unless the config sets `"portal_addr": ""`. A tenant appears for any
+principal with a role on it. Set a password (at least 12 characters) and open
 `http://<VM_IP>:8080/`:
 
 ```sh
@@ -288,7 +302,7 @@ make accept-packages ARGS=--keep
 ```
 
 This command leaves the daemon and a deployed tenant running, then prints the
-portal URL, the sign-in and the `/etc/hosts` line. Tear it down with
+portal URL with its sign-in, the daemon's pid and the app URL. Tear it down with
 `citadel tenant destroy` and `pkill -f controlplaned`.
 
 ### Day to day
@@ -296,9 +310,10 @@ portal URL, the sign-in and the `/etc/hosts` line. Tear it down with
 ```sh
 make build          # static Linux binaries into bin/
 make test           # unit tests, natively on the Mac
-make vet lint       # go vet, then the repo's own static-analysis rules
+make vet lint       # go vet, then the repo's own static-analysis rules and shellcheck
 make check          # EVERYTHING — lint, unit, images, every suite, the red team
 
+make accept                # the four suites below, in order
 make accept-controlplane   # provision, reconcile, destroy, audit
 make accept-packages       # package pipeline and portal
 make accept-egress         # egress enforcement
@@ -309,8 +324,10 @@ make redteam               # the security matrix
 
 - **Suites** share one VM and daemon, so they run sequentially. `ARGS=--keep`
   leaves a suite's tenant in place.
-- **Network probes:** three of them need a provisioned tenant and skip without
-  one.
+- **Network probes:** `make netprobe` provisions two throwaway tenants first,
+  because four probes (08, 09, 11, 15) assert what the control plane built for
+  real tenants. Run on their own, those four skip without a tenant, and 12–14 skip
+  without the egress network and proxy.
 - **`make redteam`** is a gate: **every probe must fail to reach its goal**, and every
   probe carries a positive control, so one that could not have seen an escape fails
   instead of passing. Re-run it after any container-runtime upgrade or firewall-backend
@@ -363,6 +380,9 @@ and §12 for when to quarantine versus force-upgrade.
 |---|---|
 | [docs/design.md](docs/design.md) | the **why**: invariants, architecture, threat model, decisions |
 | [hack/vm/README.md](hack/vm/README.md) | creating and driving the development VM |
+| [images/pb-hardened/README.md](images/pb-hardened/README.md) | the PocketBase image: builds, adding a version, profiles |
+| [images/edge-caddy/README.md](images/edge-caddy/README.md) | the edge proxy image |
+| [images/egress-proxy/README.md](images/egress-proxy/README.md) | the egress proxy image and why it is built |
 
 Read design §1 (invariants) and §9 (network model) before changing anything that
 crosses the sandbox boundary, and §14 as well if it touches ownership, grants or

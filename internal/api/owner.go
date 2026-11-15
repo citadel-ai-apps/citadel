@@ -1,18 +1,16 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/uptrace/bun"
 
 	"github.com/citadel-ai-apps/citadel/internal/auditlog"
-	"github.com/citadel-ai-apps/citadel/internal/grantpolicy"
 	"github.com/citadel-ai-apps/citadel/internal/identity"
+	"github.com/citadel-ai-apps/citadel/internal/reconcile"
 	"github.com/citadel-ai-apps/citadel/internal/store"
 )
 
@@ -114,12 +112,7 @@ func (s *Server) acceptTransfer(w http.ResponseWriter, req *http.Request) {
 	err = s.db.Tx(ctx, func(tx bun.Tx) error {
 
 		var err error
-		tr, err = s.ident.AcceptTransfer(ctx, tx, actor, t.ID)
-		if err != nil {
-
-			return err
-		}
-		inherited, err = s.inheritGrants(ctx, tx, t, tr, actor)
+		tr, inherited, err = s.ident.AcceptTransfer(ctx, tx, actor, t.ID)
 		return err
 	})
 	if err != nil {
@@ -135,68 +128,6 @@ func (s *Server) acceptTransfer(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// inheritGrants records what the new owner is taking on, and puts a clock on it.
-//
-// A transfer must not silently carry grants. The person now accountable for an
-// instance should have to look at what it can reach — so every Tier-2 grant gets
-// a re-affirmation row, and an unaffirmed one stops being an input to
-// enforcement at its due date. Tier-1 grants are left alone: they were
-// auto-granted against a policy that has not changed, and making an owner
-// re-confirm api.stripe.com would train them to click through the list.
-func (s *Server) inheritGrants(ctx context.Context, tx bun.Tx, t store.Tenant,
-	tr store.OwnerTransfer, actor identity.Actor) ([]store.Grant, error) {
-
-	all, err := store.ListGrants(ctx, tx, store.GrantFilter{TenantID: t.ID})
-	if err != nil {
-
-		return nil, err
-	}
-	now := time.Now().UTC()
-	due := now.Add(store.ReaffirmWindow)
-	var inherited []store.Grant
-	for _, g := range all {
-
-		if !g.Active(now) || g.Tier != grantpolicy.TierHuman {
-
-			continue
-		}
-		if err := store.InsertReaffirmation(ctx, tx, store.Reaffirmation{
-			GrantID: g.ID, TransferID: tr.ID, DueAt: due,
-		}); err != nil {
-
-			return nil, err
-		}
-		inherited = append(inherited, g)
-	}
-	if len(inherited) == 0 {
-
-		return nil, nil
-	}
-	subjects := make([]string, 0, len(inherited))
-	for _, g := range inherited {
-
-		subjects = append(subjects, g.Kind+":"+g.Subject)
-	}
-	if _, err := s.audit.Append(ctx, tx, auditlog.Event{
-		ActorID: actor.ID, ActorKind: actor.Kind, TenantID: t.ID,
-		// Its own action, not a second ActionOwnerTransferred: one transfer must
-		// produce exactly one transfer event, or "how many times did this change
-		// hands?" stops being a countable question.
-		Action:     auditlog.ActionGrantsInherited,
-		SubjectRef: "transfer/" + tr.ID,
-		Detail:     map[string]any{"inherited_grants": len(inherited), "due_at": due.Format(time.RFC3339)},
-	}); err != nil {
-
-		return nil, err
-	}
-	return inherited, store.Notify(ctx, tx, store.Notification{
-		TenantID: t.ID, PrincipalID: actor.ID, Audience: store.AudienceTenant,
-		Kind: store.NotifyGrantReaffirmDue, SubjectRef: "transfer/" + tr.ID,
-		Body: fmt.Sprintf("You now own %s. It can reach: %s. Re-affirm these by %s or they stop "+
-			"being enforced.", t.Slug, strings.Join(subjects, ", "), due.Format("2006-01-02")),
-	})
-}
-
 // reaffirmGrant is the new owner confirming one inherited grant.
 func (s *Server) reaffirmGrant(w http.ResponseWriter, req *http.Request) {
 
@@ -209,6 +140,13 @@ func (s *Server) reaffirmGrant(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 
 		writeErr(w, statusFor(err), err)
+		return
+	}
+	// Re-affirming keeps an inherited grant in force past its due date, so it
+	// is a grant decision, and a frozen tenant's access does not move (§14.5).
+	if t.FrozenReason != "" {
+
+		writeErr(w, statusFor(reconcile.ErrFrozen), fmt.Errorf("%w: %s", reconcile.ErrFrozen, t.FrozenReason))
 		return
 	}
 	ctx := req.Context()

@@ -42,6 +42,7 @@ func main() {
 const usage = `citadel — control-plane CLI
 
   citadel tenant create --slug <slug> --pb-version <ver> [--owner <principal>] [--app-dir <dir>]
+                       [--disk-mib <MiB>] [--mem-mib <MiB>] [--cpus <n>] [--body-cap <size>]
   citadel tenant list
   citadel tenant status <slug>
   citadel tenant start|stop|restart <slug>
@@ -94,17 +95,20 @@ const usage = `citadel — control-plane CLI
   citadel principal list
 
   citadel runtime-version add <ver> [--digest <ref>] [--state current|supported|deprecated|eol]
+                              [--hardening-rev N] [--arch amd64|arm64]
   citadel runtime-version list
   citadel runtime-version set-state <ver> --state <s> [--eol-at YYYY-MM-DD]
 
   citadel audit query [--tenant <id>] [--actor <id>] [--action <name|family.>] [--limit N]
+                      [--since <RFC3339>]
   citadel audit verify
   citadel audit export [--tenant <id>]
   citadel fleet
 
 Global flags:
-  --socket <path>   control-plane socket (default %s)
-  --as <principal>  acting principal; else $CITADEL_PRINCIPAL, else person:$SUDO_USER
+  --socket <path>   control-plane socket; else $CITADEL_SOCKET, else %s
+  --as <principal>  acting principal; else $CITADEL_PRINCIPAL, else person:<$SUDO_USER,
+                    $USER or $LOGNAME, whichever is set first and is not root>
   --json            print raw JSON instead of a table
 `
 

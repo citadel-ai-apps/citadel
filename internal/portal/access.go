@@ -13,6 +13,7 @@ import (
 	"github.com/citadel-ai-apps/citadel/internal/attest"
 	"github.com/citadel-ai-apps/citadel/internal/auditlog"
 	"github.com/citadel-ai-apps/citadel/internal/identity"
+	"github.com/citadel-ai-apps/citadel/internal/reconcile"
 	"github.com/citadel-ai-apps/citadel/internal/store"
 )
 
@@ -294,6 +295,12 @@ func (s *Server) reaffirmGrant(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	to := "/t/" + t.ID
+	// A grant decision, so it waits out a freeze like the API's (§14.5).
+	if t.FrozenReason != "" {
+
+		back(w, req, to, "", fmt.Errorf("%w: %s", reconcile.ErrFrozen, t.FrozenReason))
+		return
+	}
 	g, err := store.GetGrant(ctx, s.db.Reader(), mux.Vars(req)["gid"])
 	if err != nil || g.TenantID != t.ID {
 

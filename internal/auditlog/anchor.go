@@ -95,9 +95,11 @@ func Anchor(ctx context.Context, db *store.DB, signer Signer, dir string) (store
 
 		return store.Anchor{}, err
 	}
-	// The file first, then the row: a file with no row is a harmless duplicate
-	// on the next tick, while a row with no file claims an offsite copy that
-	// does not exist.
+	// The file first, then the row: a row with no file would claim a copy that
+	// does not exist. A file with no row is not harmless, though: Verify fails
+	// on it, because rows are append-only and a missing one reads as a deleted
+	// one. A crash between these two steps leaves exactly that, and an operator
+	// has to tell it from tampering by hand (design §14.4).
 	err = db.Tx(ctx, func(tx bun.Tx) error {
 
 		return store.InsertAnchor(ctx, tx, a)

@@ -65,6 +65,24 @@ func (s *Service) LiveCopy(ctx context.Context, t store.Tenant, dst string, lock
 
 		return err
 	}
+	if err := liveCopy(ctx, stream, src, dst, imageBytes(t)); err != nil {
+
+		return fmt.Errorf("%w (tenant %s)", err, t.ID)
+	}
+	return nil
+}
+
+// liveCopy is LiveCopy below the mount: src is a running instance's pb_data,
+// dst the staging directory, and limit the size of the image pb_data lives in.
+//
+// One budget covers the whole copy, databases and plain files together, as it
+// does for stoppedCopy. The image bounds the blocks a tenant writes, not what
+// the copy writes out: every top-level *.db is streamed, and a hardlink is a
+// regular file that costs the quota nothing, so a budget per database would let
+// a tenant multiply the staging directory's share of the host's disk by
+// linking one database under many names.
+func liveCopy(ctx context.Context, stream Streamer, src, dst string, limit int64) error {
+
 	dbs, err := sqliteFiles(src)
 	if err != nil {
 
@@ -74,20 +92,18 @@ func (s *Service) LiveCopy(ctx context.Context, t store.Tenant, dst string, lock
 
 		return fmt.Errorf("backup: no database found in %s", src)
 	}
-	// No database can be larger than the image it lives in, and neither can
-	// everything else in pb_data put together.
-	limit := imageBytes(t)
+	b := newBudget(limit)
 
 	// Databases first, so an image without pbsnap fails before dst holds
 	// anything a fallback would have to clear away.
 	for _, name := range dbs {
 
-		if err := streamCopy(ctx, stream, name, dst, limit); err != nil {
+		if err := streamCopy(ctx, stream, name, dst, b); err != nil {
 
-			return fmt.Errorf("backup: live copy of %s for %s: %w", name, t.ID, err)
+			return fmt.Errorf("backup: live copy of %s: %w", name, err)
 		}
 	}
-	return copyPlain(src, dst, dbSkip(dbs), newBudget(limit))
+	return copyPlain(src, dst, dbSkip(dbs), b)
 }
 
 // StoppedCopy is LiveCopy's fallback for an instance with no PocketBase
@@ -203,8 +219,9 @@ func dbSkip(dbs []string) map[string]bool {
 	return skip
 }
 
-// streamCopy pulls one database out of the sandbox into dst/name.
-func streamCopy(ctx context.Context, stream Streamer, name, dst string, limit int64) error {
+// streamCopy pulls one database out of the sandbox into dst/name, charging the
+// private copy it streams to b.
+func streamCopy(ctx context.Context, stream Streamer, name, dst string, b *budget) error {
 
 	raw := filepath.Join(dst, ".pbsnap-"+name)
 	defer removeDB(raw)
@@ -217,7 +234,7 @@ func streamCopy(ctx context.Context, stream Streamer, name, dst string, limit in
 		pw.CloseWithError(err)
 		done <- err
 	}()
-	readErr := pbsnap.Read(pr, raw, limit)
+	readErr := pbsnap.Read(pr, raw, b.left)
 	// Unblock the producer if Read stopped early, then take ITS error first:
 	// "the image has no pbsnap" is the one the caller branches on.
 	pr.CloseWithError(errors.New("backup: reader stopped"))
@@ -231,6 +248,19 @@ func streamCopy(ctx context.Context, stream Streamer, name, dst string, limit in
 	case streamErr != nil:
 		return streamErr
 	}
+	// Charged on what was streamed, as copyDBFiles charges what it copied: the
+	// private copy is the larger of the two files this leaves behind at once.
+	fi, err := os.Stat(raw)
+	if err != nil {
+
+		return fmt.Errorf("backup: %w", err)
+	}
+	if fi.Size() > b.left {
+
+		return fmt.Errorf("%w: %s is %d bytes, and only %d of the %d-byte image remain",
+			ErrOverBudget, name, fi.Size(), b.left, b.total)
+	}
+	b.left -= fi.Size()
 	return finishPrivateCopy(ctx, raw, dst, name)
 }
 

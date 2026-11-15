@@ -117,6 +117,12 @@ func TestAFrozenTenantsGrantsDoNotMove(t *testing.T) {
 
 		t.Errorf("grant decision on a frozen tenant = %d, want 409: %s", w.Code, w.Body)
 	}
+	// Re-affirming keeps an inherited grant in force past its due date: a
+	// decision too, so it waits out the freeze.
+	if w := socketPost(h, "/api/v1/tenants/demo/grants/g-t2/reaffirm", "person:owner", `{}`); w.Code != http.StatusConflict {
+
+		t.Errorf("re-affirmation on a frozen tenant = %d, want 409: %s", w.Code, w.Body)
+	}
 
 	del := func(body string) int {
 

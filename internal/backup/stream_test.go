@@ -29,7 +29,7 @@ func TestStreamCopyProducesAVacuumedCopyAndNothingElse(t *testing.T) {
 	}
 
 	dst := t.TempDir()
-	if err := streamCopy(context.Background(), stream, "data.db", dst, 1<<30); err != nil {
+	if err := streamCopy(context.Background(), stream, "data.db", dst, newBudget(1<<30)); err != nil {
 
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestStreamCopyReportsAMissingHelper(t *testing.T) {
 		return fmt.Errorf("%w: /pb/pbsnap", driver.ErrExecNotFound)
 	}
 	dst := t.TempDir()
-	err := streamCopy(context.Background(), stream, "data.db", dst, 1<<30)
+	err := streamCopy(context.Background(), stream, "data.db", dst, newBudget(1<<30))
 	if !errors.Is(err, driver.ErrExecNotFound) {
 
 		t.Fatalf("err = %v, want ErrExecNotFound", err)
@@ -127,7 +127,7 @@ func TestStreamCopyRefusesACorruptStream(t *testing.T) {
 		}
 	}
 	dst := t.TempDir()
-	if err := streamCopy(context.Background(), stream, "data.db", dst, 1<<30); err == nil {
+	if err := streamCopy(context.Background(), stream, "data.db", dst, newBudget(1<<30)); err == nil {
 
 		t.Fatal("a scrambled database was accepted as a backup")
 	}
@@ -135,4 +135,86 @@ func TestStreamCopyRefusesACorruptStream(t *testing.T) {
 
 		t.Fatal("a refused copy left data.db in dst")
 	}
+}
+
+// TestLiveCopyChargesEveryDatabaseToOneBudget pins §11's bound on the live
+// path: everything copied out of pb_data, databases included, is charged to
+// one image-sized budget. A hardlink is a regular file that costs the quota
+// nothing, so a per-database budget let a tenant stage the image once per name.
+func TestLiveCopyChargesEveryDatabaseToOneBudget(t *testing.T) {
+
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "data.db")
+	db := busyDB(t, src)
+	size := checkpointedSize(t, db)
+	for _, name := range []string{"a.db", "b.db"} {
+
+		if err := os.Link(src, filepath.Join(srcDir, name)); err != nil {
+
+			t.Fatal(err)
+		}
+	}
+	stream := func(ctx context.Context, name string, w io.Writer) error {
+
+		return pbsnap.Write(ctx, filepath.Join(srcDir, name), w)
+	}
+
+	// Room for two copies of the database, not three.
+	if err := liveCopy(context.Background(), stream, srcDir, t.TempDir(), 2*size+size/2); err == nil {
+
+		t.Fatal("three names for one database fit a budget of two and a half: want a refusal")
+	}
+	// The control: the same tree fits a budget that holds all three.
+	if err := liveCopy(context.Background(), stream, srcDir, t.TempDir(), 3*size+size/2); err != nil {
+
+		t.Fatalf("three databases in a budget of three and a half: %v", err)
+	}
+}
+
+// TestLiveCopyLeavesPlainFilesOnlyTheRemainder: the plain files after the
+// databases draw on what the databases left, not on a fresh image's worth.
+func TestLiveCopyLeavesPlainFilesOnlyTheRemainder(t *testing.T) {
+
+	srcDir := t.TempDir()
+	db := busyDB(t, filepath.Join(srcDir, "data.db"))
+	size := checkpointedSize(t, db)
+	if err := os.WriteFile(filepath.Join(srcDir, "blob"), make([]byte, size), 0o600); err != nil {
+
+		t.Fatal(err)
+	}
+	stream := func(ctx context.Context, name string, w io.Writer) error {
+
+		return pbsnap.Write(ctx, filepath.Join(srcDir, name), w)
+	}
+
+	err := liveCopy(context.Background(), stream, srcDir, t.TempDir(), size+size/2)
+	if !errors.Is(err, ErrOverBudget) {
+
+		t.Fatalf("a database and a file of its size in one and a half budgets: got %v, want ErrOverBudget", err)
+	}
+	if err := liveCopy(context.Background(), stream, srcDir, t.TempDir(), 2*size+size/2); err != nil {
+
+		t.Fatalf("the same tree in two and a half budgets: %v", err)
+	}
+}
+
+// checkpointedSize folds db's WAL into its main file and returns the size a
+// pbsnap stream of it declares.
+func checkpointedSize(t *testing.T, db *sql.DB) int64 {
+
+	t.Helper()
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+
+		t.Fatal(err)
+	}
+	var pages, pageSize int64
+	if err := db.QueryRow(`PRAGMA page_count`).Scan(&pages); err != nil {
+
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+
+		t.Fatal(err)
+	}
+	return pages * pageSize
 }

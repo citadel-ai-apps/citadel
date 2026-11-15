@@ -8,7 +8,7 @@ make egress-image      # builds, pushes 127.0.0.1:5000/egress-proxy:6-r3, record
 
 The control plane schedules it by digest. Unless `egress_proxy_image` is set, it uses
 the newest entry for the host's architecture in `digests.txt` (`<squid> r<rev> <arch>
-<digest>`). The build also tags `v2p-squid:6-r3` locally for the netprobe scripts that
+<repo>@sha256:…`). The build also tags `v2p-squid:6-r3` locally for the netprobe scripts that
 run Squid by hand.
 
 **What is pinned.** The Alpine base is pinned by its multi-arch index digest. The

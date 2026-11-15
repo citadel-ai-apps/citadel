@@ -10,7 +10,7 @@ Build and verify from the repo root (Docker work runs in the development VM):
 ./hack/in-vm.sh make registry                                # local zot on 127.0.0.1:5000
 ./hack/in-vm.sh make image PB_VERSION=0.42.2 HARDENING_REV=3 # one image → digest
 ./hack/in-vm.sh make image-matrix HARDENING_REV=3            # every version in versions.txt
-./hack/in-vm.sh make smoke                                   # image self-checks by digest
+./hack/in-vm.sh make smoke PB_VERSION=0.42.2                 # image self-checks by digest
 ```
 
 The control plane schedules **digests, never tags**. `make image` appends to `digests.txt`,
@@ -20,7 +20,8 @@ which the control plane reads.
 
 1. `./fetch-checksum.sh <version>` pins the upstream sha256 into `checksums/`. Commit it.
 2. Add the version to `versions.txt`.
-3. `make image PB_VERSION=<version> HARDENING_REV=<current>`, then run smoke.
+3. `make image PB_VERSION=<version> HARDENING_REV=<current>`, then
+   `make smoke PB_VERSION=<version>`.
 
 Builds verify only against the **committed** checksum.
 

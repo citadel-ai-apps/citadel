@@ -39,8 +39,8 @@ type RuntimeVersion struct {
 }
 
 // Upgradable reports whether a tenant may move ONTO this version of their own
-// accord. A deprecated version still runs and still takes patch updates, but
-// nobody is moved onto a line the platform is trying to retire.
+// accord. A deprecated version still runs, but nobody is moved onto a line the
+// platform is trying to retire.
 func (rv RuntimeVersion) Upgradable() bool {
 
 	return rv.State == VersionCurrent || rv.State == VersionSupported

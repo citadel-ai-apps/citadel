@@ -190,10 +190,19 @@ func (r *Reconciler) forceUpgrade(ctx context.Context, t store.Tenant, rv store.
 // The tenant's data is untouched and the instance keeps running behind a 503;
 // the operator alert and the tenant's notice both carry the rehearsal's
 // failures verbatim, so somebody can act on them.
-func (r *Reconciler) quarantineForEOL(ctx context.Context, t store.Tenant, job store.UpgradeJob, rep RehearsalReport) {
+//
+// The same containment covers an operator's `--force` upgrade, which is not
+// about end-of-life at all: actor says which it was, so the notices name the
+// real cause and the audit row names who forced it.
+func (r *Reconciler) quarantineForEOL(ctx context.Context, actor identity.Actor, t store.Tenant, job store.UpgradeJob, rep RehearsalReport) {
 
-	reason := fmt.Sprintf("forced EOL upgrade %s → %s: the rehearsal failed, so the upgrade was not applied: %s",
-		job.FromVersion, job.ToVersion, strings.Join(rep.Failures, " | "))
+	what, tenantWhy := "forced EOL upgrade", "This instance runs an end-of-life PocketBase version and the rehearsal of the forced upgrade failed"
+	if actor.ID != identity.PlatformPrincipal {
+
+		what, tenantWhy = "operator-forced upgrade", "An operator forced an upgrade of this instance and its rehearsal failed"
+	}
+	reason := fmt.Sprintf("%s %s → %s: the rehearsal failed, so the upgrade was not applied: %s",
+		what, job.FromVersion, job.ToVersion, strings.Join(rep.Failures, " | "))
 
 	err := r.db.Tx(ctx, func(tx bun.Tx) error {
 
@@ -204,7 +213,7 @@ func (r *Reconciler) quarantineForEOL(ctx context.Context, t store.Tenant, job s
 		if err := store.Notify(ctx, tx, store.Notification{
 			TenantID: t.ID, Audience: store.AudienceTenant, Kind: store.NotifyRuntimeEOLBlocked,
 			SubjectRef: "upgrade/" + job.ID,
-			Body:       trimBody("This instance runs an end-of-life PocketBase version and the rehearsal of the forced upgrade failed, so the upgrade was NOT applied and your data was not touched. The instance is quarantined — it returns 503 — until its hooks work on " + job.ToVersion + ". What failed: " + strings.Join(rep.Failures, " | ")),
+			Body:       trimBody(tenantWhy + ", so the upgrade was NOT applied and your data was not touched. The instance is quarantined — it returns 503 — until its hooks work on " + job.ToVersion + ". What failed: " + strings.Join(rep.Failures, " | ")),
 		}); err != nil {
 
 			return err
@@ -212,13 +221,13 @@ func (r *Reconciler) quarantineForEOL(ctx context.Context, t store.Tenant, job s
 		if err := store.Notify(ctx, tx, store.Notification{
 			TenantID: t.ID, Audience: store.AudienceOperator, Kind: store.NotifyRuntimeEOLBlocked,
 			SubjectRef: "upgrade/" + job.ID,
-			Body:       trimBody("A forced EOL upgrade could not proceed and the tenant was quarantined instead. " + reason),
+			Body:       trimBody("A " + what + " could not proceed and the tenant was quarantined instead. " + reason),
 		}); err != nil {
 
 			return err
 		}
 		_, err := r.audit.Append(ctx, tx, auditlog.Event{
-			ActorID: identity.PlatformPrincipal, ActorKind: identity.KindPlatform, TenantID: t.ID,
+			ActorID: actor.ID, ActorKind: actor.Kind, TenantID: t.ID,
 			Action:     auditlog.ActionEOLQuarantined,
 			SubjectRef: "upgrade/" + job.ID,
 			Detail:     map[string]any{"from": job.FromVersion, "to": job.ToVersion, "failures": len(rep.Failures)},

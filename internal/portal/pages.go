@@ -931,6 +931,13 @@ func (s *Server) reenableGrant(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	to := "/t/" + t.ID
+	// A re-enable files a grant request, and a frozen tenant's access does not
+	// move until an operator lifts the freeze (§14.5).
+	if t.FrozenReason != "" {
+
+		back(w, req, to, "", fmt.Errorf("%w: %s", reconcile.ErrFrozen, t.FrozenReason))
+		return
+	}
 	gid := mux.Vars(req)["gid"]
 	old, err := store.GetGrant(ctx, s.db.Reader(), gid)
 	if err != nil || old.TenantID != t.ID || old.Kind != store.GrantEgressHost {
@@ -1052,12 +1059,20 @@ func (s *Server) ownerAction(w http.ResponseWriter, req *http.Request) {
 		back(w, req, to, "offered to "+req.FormValue("to")+" — ownership moves when they accept", err)
 
 	case "accept":
+		var inherited []store.Grant
 		err = s.db.Tx(ctx, func(tx bun.Tx) error {
 
-			_, err := s.ident.AcceptTransfer(ctx, tx, sess.actor, t.ID)
+			var err error
+			_, inherited, err = s.ident.AcceptTransfer(ctx, tx, sess.actor, t.ID)
 			return err
 		})
-		back(w, req, to, "you now own "+t.Slug, err)
+		msg := "you now own " + t.Slug
+		if len(inherited) > 0 {
+
+			msg += fmt.Sprintf(" — re-affirm the %d inherited grant(s) on the Access tab within %d days, "+
+				"or they stop being enforced", len(inherited), int(store.ReaffirmWindow.Hours()/24))
+		}
+		back(w, req, to, msg, err)
 
 	case "decline":
 		err = s.db.Tx(ctx, func(tx bun.Tx) error {

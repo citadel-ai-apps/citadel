@@ -44,12 +44,12 @@ the invariant.
 | ID | Invariant | Why |
 |----|-----------|-----|
 | **INV-1** | **Tenant code is hostile.** A tenant's `pb_hooks` is arbitrary code execution inside the PocketBase process. Under Docker the boundary is namespaces, cgroups and seccomp, not a hypervisor. Tenant containers, the one-shot CLI containers that run against tenant data, and rehearsal instances all run under gVisor; `tenant_runtime` accepts nothing but `runsc`. | PocketBase's JSVM exposes `$os` (including shell execution), `$dbx` (raw SQL), `$filepath` and `$http`. It is an extension mechanism, not a sandbox. Tenant containers run under gVisor (D2). |
-| **INV-2** | **The PocketBase binary is never modified and never supplied by the tenant.** The image, entrypoint and flags are platform-owned. A runtime version's digest comes only from `images/pb-hardened/digests.txt`, the platform's own build. | "Hardened PocketBase" means a hardened *environment*, not a patched binary. |
+| **INV-2** | **The PocketBase binary is never modified and never supplied by the tenant.** The image, entrypoint and flags are platform-owned. A runtime version's digest comes only from a platform digests file: `runtime-version add` accepts only an entry in `images/pb-hardened/digests.txt`, the platform's own build, and `controlplaned --seed-digests <file>` registers the entries of a file the operator names at start-up that match the configured arch and hardening rev. | "Hardened PocketBase" means a hardened *environment*, not a patched binary. |
 | **INV-3** | **Exactly one PocketBase process may ever have a given `pb_data` open.** The instance lock serialises every control-plane operation on a tenant; within it, the single container name, destroy-before-ensure, and one-shots that are removed before the lock is released (and swept at start-up) keep a second process off the data. | SQLite is single-writer. Two processes corrupt it. |
 | **INV-4** | **PocketBase version upgrades are one-way.** Rollback is *restore from snapshot*, never *swap the image tag back*: an operator stops the tenant, pins its runtime to the snapshot's version (`pin-runtime`), restores, then starts it. A forced restore across versions leaves the instance stopped. | A newer binary migrates `pb_data` irreversibly, and the failure is **silent**: an old binary on migrated data can serve `/api/health` OK with a broken data plane. Nothing at runtime catches it, so the snapshot-only rollback and the `backup.pb_version` restore check are absolute. |
-| **INV-5** | **The control plane never manages an instance through that instance's PocketBase API.** Management is process-level and filesystem-level only. The only calls to an instance are read-only verification: `/api/health`, the superuser `auth-refresh` data-plane check, and the release manifest's own smoke requests. | The tenant is superuser of their own instance and can delete any account the platform creates. |
+| **INV-5** | **The control plane never manages an instance through that instance's PocketBase API.** Management is process-level and filesystem-level only. The only calls to an instance are verification: the manifest's health path (`/api/health` by default), the read-only superuser `auth-refresh` data-plane check, and the release manifest's own smoke requests, which the tenant declares and which may use any method, writes included. | The tenant is superuser of their own instance and can delete any account the platform creates. |
 | **INV-6** | **Two independent version axes: runtime version and app release. Never move both in one operation.** | If both change and it breaks, nobody knows which did it. Rollback paths differ (§12). |
-| **INV-7** | **Egress is denied by default.** The default is an `internal: true` network with no outbound path, and no platform network has IPv6. Cloud metadata (`169.254.0.0/16`, `fd00:ec2::254`) is blocked unconditionally and never allowlistable, in `iptables` and — wherever Docker manages a v6 `DOCKER-USER` chain — `ip6tables`, where a deny that cannot be written stops the control plane. | SSRF from a hook to instance metadata is the most likely credential-leak path. |
+| **INV-7** | **Egress is denied by default.** The default is an `internal: true` network with no outbound path, and no platform network has IPv6. Cloud metadata (`169.254.0.0/16`, `fd00:ec2::254`) is blocked unconditionally and never allowlistable, in `iptables` and — wherever Docker manages a v6 `DOCKER-USER` chain — `ip6tables`. A deny that cannot be written at start-up stops the control plane; on a later tick the platform pass fails, is logged, and the tick is skipped. | SSRF from a hook to instance metadata is the most likely credential-leak path. |
 | **INV-8** | **Routing is by subdomain, never by path prefix.** | PocketBase assumes it is at root: admin UI at `/_/`, API at `/api/`, assets at `/`. |
 | **INV-9** | **No `docker exec` into a live tenant container, and no interactive shell in the production path.** The single exception is the platform's own `pbsnap` live copy (INV-20): a fixed binary whose only argument is a database name, behind `Driver.Snapshot`. There is no general exec method. | If you cannot debug without a shell, the log pipeline is missing. An exec path is also an escalation path. |
 | **INV-10** | **`pb_data` never lives on a network filesystem.** It is an ext4 loop mount, and the directories holding the loop images, their rehearsal copies and backups must be local too; the control plane refuses to start when `pb_root` is on NFS, SMB, FUSE or similar. | SQLite WAL locking, and a loop device over a network filesystem is the same failure one layer down. |
@@ -74,10 +74,10 @@ holding. A change that moves one of these moves the row with it.
 | ID | Enforced by | Noticed by |
 |----|-------------|------------|
 | INV-1 | `config.Validate` (runsc only); `docker.buildConfigs`; one-shot and rehearsal use the tenant spec's runtime | `controlplaned` start-up host facts; red-team `escape-battery` |
-| INV-2 | image ENTRYPOINT; `buildConfigs` sets no entrypoint, digest-only image refs; `addRuntimeVersion` accepts only a `digests.txt` entry | `diffSpec` image check |
-| INV-3 | `hostfs.Lock`; Destroy before Ensure in every start path; one-shot removed with an uncancellable context; `Recover` sweeps one-shots | acceptance `upgrade.sh` |
+| INV-2 | image ENTRYPOINT; `buildConfigs` sets no entrypoint, digest-only image refs; `addRuntimeVersion` accepts only a `digests.txt` entry; `seedDigests` reads only the operator's `--seed-digests` file | `diffSpec` image check |
+| INV-3 | `hostfs.Lock`; Destroy before Ensure in every start path; one-shot removed with an uncancellable context; `Recover` sweeps one-shots | `hostfs` lock tests (`TestLockIsExclusiveAndReleases`); nothing checks one-shot removal |
 | INV-4 | `ErrDowngrade`; `backup.Restore` pb_version guard; forced restore leaves the instance stopped; failed rollback stops and quarantines; `PinRuntime` | `DriftUpgradeStuck`; digest guard |
-| INV-5 | no management client exists; `health` makes only read-only calls | — |
+| INV-5 | no management client exists; `health` makes only verification calls (health path, `auth-refresh`, the tenant's own smoke set) | — |
 | INV-6 | process-local claim + `upgrade_job` row + instance lock; digest guard on deploy | `claim_test.go` |
 | INV-7 | `internal: true` networks with IPv6 off; `DeniedRanges`/`DeniedRangesV6`; Squid `v2p_blocked_dst` | netprobe 01–04, 08, 11 |
 | INV-8 | `proxyctl` host matchers only | acceptance `controlplane.sh` (every request by `Host`) |
@@ -291,7 +291,7 @@ pre-0.23 path runs `migrate up` first and does not trust the exit code.
 A zip containing **only**:
 
 ```
-pb_hooks/          *.pb.js
+pb_hooks/          *.js
 pb_migrations/     *.js
 pb_public/         static assets
 pbapp.json         manifest
@@ -359,8 +359,8 @@ security boundary (INV-1).
     audit-signing.key              # signs chain anchors + attestations (0600)
     portal-session.key             # signs portal session cookies
   audit/
-    anchors/<timestamp>.json       # signed chain heads (§14.4)
-    attestations/<tenant-id>/      # signed access attestations (§14.5)
+    anchors/<timestamp>-<seq>.json # signed chain heads (§14.4)
+    attestations/<tenant-id>/      # signed access attestations, <timestamp>-<id>.json (§14.5)
     evidence/                      # e.g. a hand-edited egress allowlist, kept before regeneration
   artifacts/
     <sha256>/                      # content-addressed, immutable, unpacked releases
@@ -396,7 +396,8 @@ images are sized 20 % above the nominal quota (a 100 MiB ext4 image measured 82 
 so the tenant gets the space it was sold.
 
 `meta.json` and the container labels (`v2p.managed`, `v2p.tenant`, `v2p.role`,
-`v2p.data-device`, `v2p.rehearsal`) let the host be enumerated without the database. If
+`v2p.data-device`, `v2p.rehearsal`, `v2p.oneshot`) let the host be enumerated without the
+database. If
 `state.db` is lost, an operator re-provisions tenants by hand from `meta.json`; nothing reads
 it automatically yet (§16). **Grants are never reconstructed** from it or from any manifest
 (INV-16). Every tenant comes back with no outbound path.
@@ -566,21 +567,31 @@ address unless `portal_allow_public` is set. Neither is reachable from a tenant 
 
 ### 8.5 Deploy state machine
 
+Validation and staging happen at **upload**, so a deploy only ever starts from a release that
+is already validated and unpacked:
+
 ```
-uploaded
+upload
   └─ validate (§6) ──fail──▶ rejected (specific error to user)
-       │ ok
-       ▼
-  check manifest range vs tenant.runtime_version ──fail──▶ rejected
-  classify egress requests (§14.3)
-       ├─ any Tier 0 ──────────────────────────────fail──▶ rejected
-       ├─ Tier 1 ──▶ auto-granted, grant row written, decided_by = platform
-       └─ Tier 2 ──▶ grant row pending; deploy CONTINUES, host stays unreachable
        │ ok
        ▼
   unpack to artifacts/<sha>/                  [idempotent, content-addressed]
        ▼
+  release recorded
+
+deploy <release>
+  └─ claim the tenant (no concurrent deploy or upgrade, INV-6)
+       ▼
+  check manifest range vs tenant.runtime_version; freeze ──fail──▶ rejected
+  classify egress requests (§14.3)
+       ├─ any Tier 0 ──────────────────────────────fail──▶ rejected
+       ├─ Tier 1 ──▶ auto-granted, decided_by = platform
+       └─ Tier 2 ──▶ pending; deploy CONTINUES, host stays unreachable
+       │ ok
+       ▼
   acquire instance.lock                                                  (INV-3)
+       ▼
+  digest guard: last-ran digest == desired digest ──fail──▶ rejected     (INV-11)
        ▼
   write the grant rows classified above
        ▼
@@ -681,8 +692,9 @@ tenant container ──▶ egress-proxy:3128 ──▶ internet
    static IP. The attachment is part of the **create spec**, never hot-plugged: under `runsc`,
    `docker network connect` reports success and does nothing. A first grant or last
    revocation therefore recreates the container.
-2. Per-tenant `DOCKER-USER` rules: one accept from the tenant's address to the proxy port,
-   tagged with the justifying grant id, above a drop for everything else from that tenant.
+2. Per-tenant `DOCKER-USER` rules: one accept per active grant from the tenant's address to
+   the proxy port, each tagged with its grant id, above a drop for everything else from that
+   tenant.
 3. The proxy (Squid) maps **source IP → tenant → allowed domains**, generated from **active
    grants** only (INV-16). It filters TLS on the CONNECT target *and* the ClientHello SNI,
    with **no MITM** and no certificates injected into tenants.
@@ -691,9 +703,11 @@ tenant container ──▶ egress-proxy:3128 ──▶ internet
    The manager ACL sits **first**, above `Safe_ports`. The deny for every other source sits
    above the per-tenant allows, because tenants share this network and the report names the
    whole fleet's allowlist. `test/netprobe/13-squid-mgr.sh` asserts both halves.
-5. Denials are logged with tenant, destination and grant id, and surfaced at
-   `GET /api/v1/tenants/:id/egress` with one of four reasons: *never requested*, *awaiting
-   approval*, *denied — <reason>*, *expired on <date>*.
+5. Denials are counted per tenant and destination (host, port, hits, first and last seen)
+   and surfaced at `GET /api/v1/tenants/:id/egress`. Each host there carries its `state` —
+   `never_requested`, `pending`, `approved`, `denied`, `expired` or `revoked` — with the
+   grant id, the reason a human gave and the expiry, so *awaiting approval*, *denied —
+   <reason>* and *expired on <date>* read as different problems rather than one timeout.
 
 The proxy env vars make cooperative hooks work, but the DROP is the boundary (INV-14).
 Tenants get no external DNS: they pass hostnames in CONNECT and the proxy resolves them.
@@ -818,7 +832,10 @@ instance (INV-1, INV-5). Back up from the host.
 | Format | Taken | Artifact | Used by |
 |---|---|---|---|
 | `image` | container stopped, image unmounted | compressed copy of `data.img` | `pre_deploy`, `pre_upgrade`, final snapshot on destroy |
-| `files` | container still serving | tar of a `VACUUM INTO` of each database, from a private copy streamed out of the sandbox | `routine`, and the rehearsal copy (§12) |
+| `files` | container still serving | tar of a `VACUUM INTO` of each database, from a private copy streamed out of the sandbox | `routine` |
+
+The rehearsal copy (§12) takes the same live path but writes into a fresh scratch ext4 image
+rather than a tar.
 
 `backup.format` is an explicit column. Never `cp` a live WAL database, and never open one from
 the host (INV-20). The only live path is `pbsnap`, shipped in `pb-hardened` from h2 and run with
@@ -842,7 +859,8 @@ own disk, which the staging directory shares with every other tenant.
 | `pre_upgrade` | every runtime upgrade | **30 days** (INV-4: the only rollback path) |
 | `manual` | tenant-triggered, and on destroy | 30 days |
 
-A sweep on the reconcile tick enforces retention; there is no separate cron. Two snapshots
+A sweep run from the reconcile tick, at most once per `backup_sweep_interval` (default one
+hour), enforces retention; there is no separate cron. Two snapshots
 always survive: a tenant's newest one, and any snapshot an in-flight upgrade job names.
 Deletion removes the row first, then the file.
 
@@ -876,7 +894,7 @@ each tenant stays on the version its hooks were written for and upgrades deliber
 ```
 pending
   └─ compatibility gate: target version within release.pb_min..pb_max?
-        no  ──▶ blocked (tell the tenant exactly which hooks/APIs are at risk)
+        no  ──▶ blocked (tell the tenant the release's declared range and the target)
         yes
         ▼
 rehearsing            live-copy pb_data into a fresh scratch image (§11); boot a throwaway
@@ -940,10 +958,13 @@ A deploy is rejected while an upgrade job is active for the tenant, and vice ver
 
 | State | Meaning |
 |---|---|
-| `current` | default for newly provisioned tenants |
-| `supported` | patch updates auto-applied; minors offered in the portal |
-| `deprecated` | still runs; portal nags; no new tenants; EOL date **required** on entry |
+| `current` | the version to offer new tenants; provisioning still names one explicitly (`--pb-version`) |
+| `supported` | still a valid upgrade target; upgrades are offered in the portal |
+| `deprecated` | still runs; portal nags; no longer an upgrade target; EOL date **required** on entry |
 | `eol` | platform force-upgrades past `eol_at + eol_grace`, batched |
+
+Not built yet (§16): `current` as the default when no version is named, refusing new tenants
+on a `deprecated` or `eol` version, and applying patch updates automatically.
 
 The platform nags once per `eol_nag_interval`. Forced upgrades go through the same
 `StartUpgrade`, so they cannot skip the snapshot, rehearsal or verification. **A forced
@@ -1049,7 +1070,9 @@ non-zero otherwise. The suite covers:
 - the container posture itself (runtime, capabilities, limits, binds, mount flags, log cap);
 - log floods, sparse-file backup bombs, crash loops against the restart ladder, and the CPU cap;
 - `symlink-swap`: tenant code re-pointing `pb_data` while a live backup reads it;
-- `tier2-kinds`: Tier-2 kinds land pending, and no kind but `egress_host` opens egress;
+- `tier2-kinds` (packages in `test/redteam/tier2-probe/`): Tier-2 kinds land pending, and no
+  kind but `egress_host` opens egress;
+- audit anchors: the chain head is signed and copied out where it can be replicated;
 - the accountability probes: `grant-forge` (INV-16), `grant-revive` (§14.7),
   `expired-grant`, `unbacked-rule` and `unbacked-acl` (INV-19), `audit-tamper` (INV-18), `breakglass-silent`
   and `orphan-owner` (INV-17).
@@ -1098,6 +1121,9 @@ Ownership is a history (§8.1), so "who owned this in March" is a query.
 | `admin` | yes | yes | yes | no | yes |
 | `deployer` | yes | yes (Tier 2 still needs an approver) | no | no | no |
 | `viewer` | no | no | no | no | no |
+
+Backup download is not built yet (§16). Until it is, the capability behind that column gates
+re-affirming inherited grants (§14.7), which needs someone senior enough to be accountable.
 
 - Exactly one `owner` per tenant (INV-17); other roles are unbounded.
 - **Transfer is two-party**: the owner offers, the target accepts, both are recorded, and
@@ -1239,7 +1265,7 @@ v1 and still verify, but a v1 row after the first v2 row fails verification as a
 - grants (request, decide, expire, revoke);
 - deploys and rollbacks;
 - upgrades;
-- backup create, restore, download and delete;
+- backup create, restore and delete (download once it exists, §16);
 - host-side reads of `pb_data`;
 - log access;
 - impersonation;
@@ -1261,8 +1287,10 @@ diffs it against `access_grant`. It observes:
 - the egress ACL **as loaded in the running proxy** (§9.4);
 - bind mounts, published ports (must be none) and the running image digest.
 
-SMTP relay and storage grants have nothing to observe yet (D5); the report lists them as
-recorded but not enforced.
+Only `egress_host` has host state to observe. The report lists every other kind as recorded
+but not enforced: SMTP relay and storage because nothing enforces them yet (D5), and
+`operator_data_access` and `support_impersonation` because the portal enforces them on each
+request, which leaves nothing on the host to read back.
 
 | Outcome | Meaning | Response |
 |---|---|---|
@@ -1343,10 +1371,14 @@ Logs never leave through tenant-controlled channels. The host collects stdout/st
 the driver into `/srv/citadel/logs/<tenant>/`, rotates them and exposes them read-only in
 the portal.
 
-Per-tenant metrics: CPU, memory, disk vs quota, request rate and p95 latency (from the
-proxy), health, uptime, last request, **egress denials**.
+Per-tenant metrics in the portal: disk use, CPU, memory, last health result, restarts and
+**egress denials**. Request rate, p95 latency, uptime and last request are not collected yet
+(§16); `instance.last_request_at` exists but nothing writes it.
 
-The **fleet view** (`GET /admin/fleet`, rendered at `/fleet`, operators only) leads with:
+The **fleet view** (`GET /api/v1/admin/fleet`, operators only) leads with the list below.
+`citadel fleet --json` prints all of it. The plain `citadel fleet` table and the portal's
+`/fleet` page show a subset: the page shows drift, tenants per version, upgrades in flight,
+failed rehearsals and backup age.
 
 - tenants per runtime version, and who blocks the next EOL date;
 - upgrade jobs that failed rehearsal, and upgrade rollbacks;
@@ -1360,14 +1392,19 @@ The **fleet view** (`GET /admin/fleet`, rendered at `/fleet`, operators only) le
 - the audit chain head and anchor age;
 - tenants flagged `owner_orphaned`.
 
-**Alerts** are entries in the fleet view's drift list today, with no paging (§16): a digest
-mismatch, a missing or misordered rule, a backup failure, an upgrade rollback or stuck job,
-rehearsal residue, a missing route, and the security findings below, which are never
-auto-remediated:
+**Alerts** are entries in the fleet view's drift list today, with no paging (§16). The kinds
+(`internal/reconcile/drift.go`):
 
-- `enforcement_without_grant` (an unbacked rule or egress entry).
+- runtime and posture: `digest`, `posture`;
+- network: `missing_rule`, `rule_order`, `missing_route`, `rate_limit`, `egress_acl`;
+- data and upgrades: `backup_failed`, `upgrade_rollback`, `upgrade_stuck`,
+  `rehearsal_residue`, `orphan_dir`;
+- accountability: `ownerless`;
+- the security findings, never auto-remediated — `enforcement_without_grant` in its forms
+  `unbacked_rule`, `unbacked_egress` and `unbacked_acl`.
 
-An egress allowlist edited outside the control plane (`egress.acl.tampered`) is flagged too. It
+An egress allowlist edited outside the control plane (`egress_acl_tampered`, audited as
+`egress.acl.tampered`) is flagged too. It
 is the one security finding that is remediated, because the proxy cannot keep admitting a
 host nobody granted. The edited copy is kept as evidence first (§14.5).
 
@@ -1400,6 +1437,11 @@ acceptance suites under `test/acceptance/` must still pass before anything start
 - **Alerting.** Paging for the drift list's security findings, disk above 90 % (and disk vs
   quota in the fleet view), an audit anchor stale beyond two intervals, and a periodic
   `citadel audit verify`.
+- **Version lifecycle automation.** `current` as the default when provisioning names no
+  version, refusing new tenants on a `deprecated` or `eol` version, and applying patch
+  updates automatically on `supported` lines (§12).
+- **Request metrics.** Request rate, p95 latency, uptime and `last_request_at` from the edge
+  (§15), which scale to zero also needs.
 - **Disaster recovery from `meta.json`.** It is written at provision, but
   rebuilding from it is a manual procedure.
 - **Offsite audit anchors.** Anchors are signed but written to the host that writes the chain,
@@ -1418,9 +1460,9 @@ acceptance suites under `test/acceptance/` must still pass before anything start
   `custom_domain` grant. Multi-host is a different scheduling problem and splits the audit
   chain (D14a).
 
-The `smtp_relay`, `object_storage`, `custom_domain` and `oauth_provider` grants are
-requested, decided, expiring and attested, but nothing yet enforces them (D5). The
-attestation says so explicitly.
+The `smtp_relay`, `object_storage`, `custom_domain`, `oauth_provider`, `log_access` and
+`backup_export` grants are requested, decided, expiring and attested, but nothing yet enforces
+them (D5). The attestation says so explicitly.
 
 ---
 
@@ -1437,7 +1479,7 @@ attestation says so explicitly.
 | D6 | Control-plane identity is the control plane's own store (argon2id portal passwords, sha256-hashed API tokens, signed session cookies), not a dedicated PocketBase and never a tenant's (INV-5). |
 | D7 | Tenants get their PocketBase admin UI at `/_/`, rate-limited separately from `/api/` (§10). The owner, or anyone holding `admin`, opens it from the portal with their portal login (§8.4): no PocketBase password is handed out or stored. |
 | D9 | Resource defaults are 1 CPU / 256 MiB / 2 GiB, configurable (`default_cpus`, `default_mem_mib`, `default_disk_mib`) and overridable per tenant at create. |
-| D10 | Deleting a tenant retains its data image, keys and a final snapshot until an operator explicitly purges (`--purge`). Audit events always outlive the data (INV-18). |
+| D10 | Deleting a tenant retains its data image, keys and a final snapshot unless the operator purges at deletion (`tenant destroy --purge`); no command purges retained data later yet (D10a). Audit events always outlive the data (INV-18). |
 | D11 | Security fixes: quarantine first; force-upgrade only for actively exploited vulnerabilities (§12). |
 | D12 | arm64 and amd64 are both supported: checksums are pinned for both, and images are built natively for the host's architecture (no multi-arch manifests). |
 | D14 | One global audit chain (§14.4). Tenant-scoped export and verification are operator-only. |
@@ -1472,7 +1514,7 @@ attestation says so explicitly.
 | **Egress network** | The non-internal network joined only by tenants with egress grants, containing only the forward proxy. |
 | **Rehearsal** | Booting a throwaway container on a copy of a tenant's data, on the target runtime, with no egress, to test an upgrade. |
 | **Quarantine** | The edge returns 503 for a tenant; data untouched. The alternative to a forced upgrade. |
-| **Drift** | Running digest ≠ desired digest, or a netpolicy rule missing from the host. An alert; for digests, never an automatic action (INV-11). |
+| **Drift** | Any divergence between intent and the host that the reconciler reports (§15): a digest mismatch, a missing or misordered rule, a posture violation, an unbacked rule or allowlist entry, and the like. An alert; for digests and security findings, never an automatic action (INV-11, INV-19). |
 | **Principal** | Anything that can act: a person, a service account, or the platform itself. |
 | **Grant** | One authorisation for one capability crossing the sandbox boundary, with a decider, justification and expiry. The only input to enforcement (INV-16). |
 | **Tier** | A grant's approval class: 0 never, 1 auto-granted and recorded, 2 named approver, 3 break-glass (§14.3). |

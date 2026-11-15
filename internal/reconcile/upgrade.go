@@ -532,7 +532,7 @@ func (r *Reconciler) rehearseFor(ctx context.Context, actor identity.Actor, t st
 	// availability and possibly the application.
 	if req.Forced {
 
-		r.quarantineForEOL(ctx, t, job, rep)
+		r.quarantineForEOL(ctx, actor, t, job, rep)
 	}
 	summary := "nothing was touched; no snapshot was taken"
 	r.fail(ctx, actor, t, job, "rehearsal failed: "+strings.Join(rep.Failures, "; ")+" ("+summary+")")
@@ -638,8 +638,9 @@ func (r *Reconciler) rollbackUpgrade(ctx context.Context, actor identity.Actor, 
 // pb_data may disagree, so nothing restarts it until an operator has looked.
 //
 // Desired-stopped is what keeps the reconciler from starting it; the digest
-// guard is the backstop. Quarantine puts the edge on a 503 with the reason, so
-// the tenant is told rather than left with a dead hostname.
+// guard is the backstop. Quarantine puts the edge on a 503, and the reason goes
+// to the tenant's portal (the 503 itself carries none), so the tenant is told
+// rather than left with a dead hostname.
 func (r *Reconciler) holdForOperator(ctx context.Context, actor identity.Actor, t store.Tenant, reason string) {
 
 	err := r.db.Tx(ctx, func(tx bun.Tx) error {

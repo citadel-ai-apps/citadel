@@ -344,7 +344,7 @@ func Load(path string) (Config, error) {
 // built under that tag — and Load says so in Warnings.
 const (
 	fallbackEdgeImage   = "caddy:2"
-	fallbackEgressImage = "v2p-squid:6-r2"
+	fallbackEgressImage = "v2p-squid:6-r3"
 )
 
 // resolveImages fills in the edge, egress proxy and rehearsal probe images.

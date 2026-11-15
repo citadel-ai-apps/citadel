@@ -103,11 +103,11 @@ func TestAConfiguredTagIsRefusedUnlessAllowed(t *testing.T) {
 
 		t.Fatal("edge_image as a tag was accepted")
 	}
-	if _, err := load(t, dir, `{"egress_proxy_image":"v2p-squid:6-r2"}`); err == nil {
+	if _, err := load(t, dir, `{"egress_proxy_image":"v2p-squid:6-r3"}`); err == nil {
 
 		t.Fatal("egress_proxy_image as a tag was accepted")
 	}
-	cfg, err := load(t, dir, `{"edge_image":"caddy:2","egress_proxy_image":"v2p-squid:6-r2","allow_unpinned_images":true}`)
+	cfg, err := load(t, dir, `{"edge_image":"caddy:2","egress_proxy_image":"v2p-squid:6-r3","allow_unpinned_images":true}`)
 	if err != nil || cfg.EdgeImage != "caddy:2" {
 
 		t.Fatalf("allow_unpinned_images: %v, %q", err, cfg.EdgeImage)

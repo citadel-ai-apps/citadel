@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/uptrace/bun"
 
+	"github.com/citadel-ai-apps/citadel/internal/auditlog"
+	"github.com/citadel-ai-apps/citadel/internal/grantpolicy"
 	"github.com/citadel-ai-apps/citadel/internal/identity"
 	"github.com/citadel-ai-apps/citadel/internal/store"
 )
@@ -56,7 +59,7 @@ func TestOwnershipMovesOnlyWhenTheTargetAccepts(t *testing.T) {
 	// accepting on the target's behalf.
 	if err := db.Tx(ctx, func(tx bun.Tx) error {
 
-		_, err := s.AcceptTransfer(ctx, tx, actorFor(alice), "demo")
+		_, _, err := s.AcceptTransfer(ctx, tx, actorFor(alice), "demo")
 		return err
 	}); !errors.Is(err, identity.ErrNotTransferee) {
 
@@ -65,7 +68,7 @@ func TestOwnershipMovesOnlyWhenTheTargetAccepts(t *testing.T) {
 
 	if err := db.Tx(ctx, func(tx bun.Tx) error {
 
-		_, err := s.AcceptTransfer(ctx, tx, actorFor(bob), "demo")
+		_, _, err := s.AcceptTransfer(ctx, tx, actorFor(bob), "demo")
 		return err
 	}); err != nil {
 
@@ -319,5 +322,85 @@ func TestSuspendWithReassignKeepsExactlyOneOwner(t *testing.T) {
 	if n != 1 {
 
 		t.Fatalf("%d owner.revoked events, want 1", n)
+	}
+}
+
+// A transfer does not silently carry grants (§14.7). Accepting is the one path
+// that moves a seat by transfer, so the inherited Tier-2 set gets its
+// re-affirmation clock and its audit row there, whichever surface (API or
+// portal) called it. Tier-1 grants are left alone.
+func TestAcceptingATransferPutsAClockOnInheritedTier2Grants(t *testing.T) {
+
+	db, s := setup(t)
+	ctx := context.Background()
+	seedTenant(t, db, "demo")
+	alice := mustCreate(t, db, s, "person:alice")
+	bob := mustCreate(t, db, s, "person:bob")
+	now := time.Now().UTC()
+	grant := func(id, kind string, tier int) store.Grant {
+
+		return store.Grant{
+			ID: id, TenantID: "demo", Kind: kind, Direction: grantpolicy.Direction(kind),
+			Subject: id + ".example.com", Tier: tier, Decision: store.DecisionApproved,
+			RequestedBy: alice.ID, RequestedAt: now, DecidedBy: alice.ID, DecidedAt: &now,
+			PolicyVersion: grantpolicy.PolicyVersion, ExpiresAt: now.Add(24 * time.Hour),
+		}
+	}
+	if err := db.Tx(ctx, func(tx bun.Tx) error {
+
+		if err := s.GrantRole(ctx, tx, identity.Platform(), "demo", alice.ID, identity.RoleOwner); err != nil {
+
+			return err
+		}
+		if err := store.InsertGrant(ctx, tx, grant("g-t2", store.GrantEgressHost, grantpolicy.TierHuman)); err != nil {
+
+			return err
+		}
+		return store.InsertGrant(ctx, tx, grant("g-t1", store.GrantEgressHost, grantpolicy.TierAuto))
+	}); err != nil {
+
+		t.Fatal(err)
+	}
+	if err := db.Tx(ctx, func(tx bun.Tx) error {
+
+		_, err := s.OfferTransfer(ctx, tx, actorFor(alice), "demo", bob.ID, "")
+		return err
+	}); err != nil {
+
+		t.Fatal(err)
+	}
+
+	var inherited []store.Grant
+	if err := db.Tx(ctx, func(tx bun.Tx) error {
+
+		var err error
+		_, inherited, err = s.AcceptTransfer(ctx, tx, actorFor(bob), "demo")
+		return err
+	}); err != nil {
+
+		t.Fatal(err)
+	}
+	if len(inherited) != 1 || inherited[0].ID != "g-t2" {
+
+		t.Fatalf("inherited = %v, want only the Tier-2 grant g-t2", inherited)
+	}
+	pending, err := store.PendingReaffirmations(ctx, db.Reader(), "demo")
+	if err != nil {
+
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].GrantID != "g-t2" {
+
+		t.Fatalf("pending re-affirmations = %v, want one for g-t2", pending)
+	}
+	if due := pending[0].DueAt.Sub(now); due < store.ReaffirmWindow-time.Minute || due > store.ReaffirmWindow+time.Minute {
+
+		t.Errorf("re-affirmation due in %v, want %v", due, store.ReaffirmWindow)
+	}
+	n, err := db.Reader().NewSelect().Table("audit_event").
+		Where("action = ?", auditlog.ActionGrantsInherited).Where("tenant_id = ?", "demo").Count(ctx)
+	if err != nil || n != 1 {
+
+		t.Fatalf("%s events = %d (%v), want 1", auditlog.ActionGrantsInherited, n, err)
 	}
 }

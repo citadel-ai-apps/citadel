@@ -175,8 +175,8 @@ func (s *Server) createBackup(w http.ResponseWriter, req *http.Request) {
 
 // EgressEntry is one host and why it is, or is not, reachable.
 //
-// The four reasons are distinct on purpose (§9.4): a developer debugging a
-// failing integration needs "awaiting approval" and "denied — <reason>" to look
+// The states are distinct on purpose (§9.4): a developer debugging a failing
+// integration needs "awaiting approval" and "denied — <reason>" to look
 // different, not an opaque timeout.
 type EgressEntry struct {
 	Host      string `json:"host"`
