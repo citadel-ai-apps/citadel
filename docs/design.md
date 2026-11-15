@@ -88,7 +88,7 @@ holding. A change that moves one of these moves the row with it.
 | INV-13 | `INPUT -i br-t-+ -j DROP` (v4 and v6) re-asserted every tick | netprobe 02, 14 |
 | INV-14 | per-tenant DROP and proxy-only accept in `DOCKER-USER` | netprobe 11 |
 | INV-15 | `CapDrop: ALL`, no `CapAdd`/`Privileged`/host modes; start-up refuses `--ip-forward-no-drop` | `DriftPosture`; netprobe 00; attestation network/mount findings |
-| INV-16 | `enforceableGrants` from `access_grant` only; Tier-3 only via break-glass; Tier-2 decided by a named person within the expiry ceiling; the portal has no decision or break-glass route | red-team `grant-forge`, `tier2-probe`; portal `TestPortalDecidesNoGrantAndOpensNoBreakglass` |
+| INV-16 | `enforceableGrants` from `access_grant` only; Tier-3 only via break-glass, opened, held, closed and reviewed only by a person with the operator flag; Tier-2 decided by a named person within the expiry ceiling; the portal has no Tier-2 decision route | red-team `grant-forge`, `tier2-probe`, `breakglass-silent`; portal `TestPortalDecidesNoGrantAndOpensNoBreakglassForTheUnnamed`, `TestPlatformNeverHoldsBreakglass` |
 | INV-17 | `one_owner_per_tenant` index; `identity.replaceOwner` | `checkOwners` → `DriftOwnerless`; red-team `orphan-owner` |
 | INV-18 | `audit_event`/`audit_anchor` triggers; `recursive_triggers(ON)`; `Append` needs a transaction | `audit verify`; signed anchors; red-team `audit-tamper` |
 | INV-19 | `attest.observe` reads iptables, the running proxy and `docker inspect` | attestation outcome; freeze; `egress.acl.tampered`; `egress.acl.unbacked` |
@@ -170,10 +170,14 @@ cross-tenant breach. Two mitigations:
    `base+10001`, with the base read from `/etc/subuid`, never hardcoded. Enable it **before
    first production use**: it moves Docker's data root (named volumes included, so the local
    registry comes back empty), disables the containerd image store, and changes every image
-   digest. The classic store pushes Docker v2 manifests, which zot accepts only with
-   `http.compat: ["docker2s2"]` (set in `deploy/registry/zot-config.json`). That change is
-   one-off: within a store, builds are reproducible (bases pinned by digest,
-   `SOURCE_DATE_EPOCH=0`, file mtimes pinned), so a rebuild gives the same digest.
+   digest of anything the daemon itself builds. Images are not built by the daemon: every
+   image is built by one pinned BuildKit in a container (`BUILDKIT_IMAGE`, `make builder`) and
+   pushed straight to the registry as OCI, with timestamps rewritten to
+   `SOURCE_DATE_EPOCH=0` and fixed compression. With bases and file mtimes pinned too, a
+   rebuild gives the same digest on any host of the same arch, whatever its Docker version
+   or image store. An unpinned `docker build` did not: two arm64 hosts recorded different
+   digests for the same `(version, rev, arch)`. zot keeps `http.compat: ["docker2s2"]`
+   (`deploy/registry/zot-config.json`) for Docker v2 manifests pushed by hand.
 
 ### Version and backend pinning
 
@@ -511,7 +515,8 @@ request and revoke, the latest attestation, and every platform access to its dat
 **Operator-only**: provision and delete tenants, resize (memory only, applied by recreating
 the container), principals and API tokens, the fleet view, runtime versions and their
 lifecycle, the upgrade queue, quarantine, Tier-2 approve/deny (the denial reason is shown to
-the tenant verbatim), break-glass, on-demand attestation, and audit query/export/verify.
+the tenant verbatim), break-glass (open, close, review) and the operator flag, on-demand
+attestation, and audit query/export/verify.
 
 **Unauthenticated**: nothing beyond login.
 
@@ -528,11 +533,28 @@ check mints its token the same way, but signs for *any* superuser, so nothing th
 to the seat can make a healthy instance look broken; it then makes one read-only
 `auth-refresh` call, which is verification, not management (INV-5).
 
-**Operator in the portal.** The platform principal opens a tenant's pages only while it holds a
-real role on it (orphan custody, §14.1). It has no standing view of tenant pages, logs or
-releases, which §14 routes through break-glass. Its operator pages are read-only apart from
-on-demand attestation. Tier-2 decisions, break-glass and its review need a named person
-(INV-16), and a shared platform login names nobody, so they live only on the socket.
+**Operator in the portal.** Two kinds of principal see the operator pages (fleet, approvals,
+access): the shared `platform` login, and a *named operator*, a person with the operator flag
+(`citadel principal operator <id> --on`, socket-only and audited). Neither has a standing view
+of tenant pages, logs or releases. The platform principal opens a tenant's pages only while it
+holds a real role on it (orphan custody, §14.1), and its pages are read-only apart from
+on-demand attestation. A named operator also opens, closes and reviews break-glass from the
+access page (§14.3); opening asks for their portal password again, so a lifted session
+cookie alone opens nothing. While a session is open the operator sees that tenant's pages
+read-only, under a banner naming the session. Break-glass and its review need a named person
+(INV-16), and a shared login names nobody, so the platform principal never holds one. Tier-2
+decisions live only on the socket.
+
+**Admin handoff under break-glass.** An `operator_data_access` session on `pb_data` also
+opens `/_/`. That is a superuser session: it can change and delete records, not only read
+them, and the tenant's notice at grant time says so. The token is signed for the owner seat
+with `refreshable: false`, so the admin UI's `auth-refresh` returns it unchanged and the UI
+session ends when the token does. That is at most 15 minutes after the click and never after
+the session ends. Each handoff is audited in the access-log family as `data.pb_data.read`,
+with `access: superuser, read-write` in its detail, tied to the grant and shown on the
+tenant's Access tab. Pre-0.23 runtimes cannot mint a token that stops at a set time, so the
+handoff is refused there. `support_impersonation`, or any scope other than `pb_data`, gets the
+pages only.
 
 Tenant auth is **separate from any tenant's PocketBase** (INV-5). Portal logins are throttled
 per principal and per source address, and signing out or changing a password bumps the
@@ -832,9 +854,11 @@ versions leaves the instance stopped for an operator to `pin-runtime` before sta
 
 Backups are tenant data outside the sandbox, so they are inside the audit model. Create,
 restore and delete are audited. Downloading or replicating a snapshot will require a
-`backup_export` grant once that path exists (§16). An operator reading `pb_data` or a
-snapshot on the host does so under an `operator_data_access` break-glass grant (§14.3); root
-can read it regardless, so the control is detection, not prevention (D15). The automated routine path runs as the platform principal and
+`backup_export` grant once that path exists (§16). An operator reaches `pb_data` through an
+`operator_data_access` break-glass session in the portal (§14.3), which needs no host access
+and is enforced, time-boxed and attributed. Root can read `pb_data` or a snapshot on the host
+regardless. That path should still be opened under a session, but nothing checks it, so the
+control there is detection, not prevention (D15). The automated routine path runs as the platform principal and
 is exempt, though each run is still audited.
 
 ---
@@ -1104,10 +1128,10 @@ A **grant** authorises one capability crossing the sandbox boundary, in either d
 
 | Kind | Subject | Notes |
 |---|---|---|
-| `operator_data_access` | `pb_data` or a snapshot | host-side read by a named operator |
+| `operator_data_access` | `pb_data` or a snapshot | a named operator's access: the portal's read-only tenant view and, on `pb_data`, the admin handoff, a read-write superuser session. Another scope, such as a snapshot about to be read as root on the host, is recorded and notified and adds nothing in the portal |
 | `backup_export` | a snapshot destination | data leaving the platform's control |
 | `log_access` | collected host-side logs | beyond the tenant's own portal view |
-| `support_impersonation` | a portal session | an operator acting *as* the tenant |
+| `support_impersonation` | a portal session | an operator seeing the tenant's portal pages, read-only |
 
 **Every grant expires.** Expiry is the mechanism, not hygiene:
 
@@ -1149,16 +1173,33 @@ every decision records the policy version.
 > the portal and at `GET /egress`.
 
 - **Tier 3: break-glass.** `operator_data_access` and `support_impersonation`, always.
-  An operator needs a tenant's data now. A root operator can read
-  the bind mount regardless (D15), so the design makes access loud rather than impossible:
-  - self-approved, hard time-boxed (60 minutes by default, not extendable);
+  An operator needs a tenant's data now. Break-glass is the door that needs no host root: for
+  as long as it is open, the portal shows the operator who opened it that tenant's pages,
+  read-only. For a data session on `pb_data` it also opens the admin handoff (§8.4), a
+  superuser session that can change and delete records. This is
+  re-checked on every request, so expiry, an early close and a cleared operator flag take
+  effect on the next click. Deploys, uploads, snapshots, restores, ownership and grant changes
+  stay off. A root operator can read the bind mount regardless (D15), so the design makes
+  access loud rather than impossible:
+  - opened, held, closed and reviewed only by a named operator: a person with the operator
+    flag, never the shared platform login (INV-16). In the portal, opening also asks for the
+    operator's password;
+  - self-approved, hard time-boxed (60 minutes, not extendable);
   - a mandatory reason, shown to the tenant verbatim;
   - **the tenant and a second operator are notified at grant time**;
-  - reviewed within 24 hours by someone else, with the review recorded;
+  - reviewed within 24 hours by someone else, with the review recorded. The review is a
+    verdict after the fact (justified or unjustified, shown to the tenant), never an approval:
+    access starts when the session opens, and the portal and CLI say so where they mention it;
   - opened only through the break-glass endpoint: a Tier-3 kind is refused as an ordinary
     grant request, and a Tier-3 row is never approved through the ordinary decision path;
   - a break-glass left unreviewed past its 24-hour window blocks further break-glass by the
-    same principal.
+    same principal. Only then: inside the window an unreviewed session blocks nothing, so an
+    operator can open further sessions (an incident longer than 60 minutes needs them) while
+    earlier ones await review;
+  - ended early by its opener or another operator (`citadel breakglass close`, or the portal),
+    and the tenant is told. The tenant cannot revoke it: a session a tenant member could end
+    mid-incident would not be break-glass. The tenant's say is the notice at grant time and
+    the verdict at review.
 
 ### 14.4 The audit event log
 
@@ -1270,7 +1311,11 @@ Without asking, a tenant sees:
 
 - its ownership history;
 - its grants: active, pending, expired, and denied with the reason verbatim;
-- **every platform access to its data**, notified at grant time.
+- **every platform access to its data**, notified at grant time. Under break-glass this means
+  the open (with what it allows: pages only, or a read-write superuser session), each admin
+  handoff (`data.pb_data.read`), the first log read of a session (`data.log.read`), the first
+  page view of a `support_impersonation` session (`data.impersonation.started`), an early
+  close and the review's verdict.
 
 Tenants get a **summarised** attestation and operators the full one (D17). The summary drops
 bridge names, chain positions, subnets, bind mounts, the running digest and finding
@@ -1335,8 +1380,23 @@ acceptance suites under `test/acceptance/` must still pass before anything start
 
 - **Snapshot download and offsite replication.** One question: a copy of tenant data leaving
   the host. `backup_export` grants exist but enforce nothing, and snapshots share a disk with
-  the data they protect. Likewise `operator_data_access` is granted through break-glass, but
-  no host-side read path checks it.
+  the data they protect. `operator_data_access` is enforced on the portal path (§14.3), but
+  no host-side read path checks it: root reading the bind mount stays detect-and-attribute
+  (D15). Two known limits of the portal path remain. An admin tab opened under a session
+  keeps working up to 15 minutes after an early close, because the token cannot be revoked
+  without restarting the instance. And PocketBase itself attributes the operator's changes
+  to the owner seat; the control plane's audit row is the attribution.
+- **Operator credentials on tenant origins.** The admin handoff ends on the tenant's own
+  hostname, and the tenant controls what is served there: hooks can intercept `/_/` (a
+  global `routerUse` middleware) and show anything, including a convincing "session
+  expired, enter your portal password" page. The owner handoff has always worked this way,
+  but the person on that page is now an operator, and an operator's portal password is
+  what opens break-glass on every tenant (the password re-check on open is exactly what a
+  fake page would ask for). Until this is closed, operators never type their portal
+  password anywhere but the portal's own origin. Candidates: a phishing-resistant step-up
+  for opening break-glass (WebAuthn, bound to the portal's origin); a separate credential
+  for operator actions; or no admin handoff for operators, with snapshots as the read
+  path. Done when a credential captured on a tenant origin cannot open break-glass.
 - **Alerting.** Paging for the drift list's security findings, disk above 90 % (and disk vs
   quota in the fleet view), an audit anchor stale beyond two intervals, and a periodic
   `citadel audit verify`.
@@ -1381,7 +1441,7 @@ attestation says so explicitly.
 | D11 | Security fixes: quarantine first; force-upgrade only for actively exploited vulnerabilities (§12). |
 | D12 | arm64 and amd64 are both supported: checksums are pinned for both, and images are built natively for the host's architecture (no multi-arch manifests). |
 | D14 | One global audit chain (§14.4). Tenant-scoped export and verification are operator-only. |
-| D15 | Break-glass is detect-and-attribute (§14.3, Tier 3), not technical prevention. |
+| D15 | Root on the host is detect-and-attribute (§14.3, Tier 3), not technical prevention. Break-glass is the enforced, rootless door to a tenant's live data; reading a snapshot still means root on the host, under a session that puts the read on the record. |
 | D16 | Principals use local accounts. `principal.external_id` is reserved so SSO/OIDC can replace the credential source without changing anything downstream. |
 | D17 | Attestations are summarised for tenants and full for operators (§14.6). |
 
@@ -1417,6 +1477,7 @@ attestation says so explicitly.
 | **Grant** | One authorisation for one capability crossing the sandbox boundary, with a decider, justification and expiry. The only input to enforcement (INV-16). |
 | **Tier** | A grant's approval class: 0 never, 1 auto-granted and recorded, 2 named approver, 3 break-glass (§14.3). |
 | **Attestation** | A signed report of a tenant's effective external access, derived from the host and diffed against grants (INV-19). |
-| **Break-glass** | Time-boxed, self-approved operator access to tenant data during an incident; notified at grant time, reviewed within 24h. |
+| **Break-glass** | Time-boxed, self-approved access to one tenant for the named operator who opened it during an incident: its portal pages read-only, plus, for data access on `pb_data`, a read-write superuser session in its PocketBase admin. Notified at grant time, reviewed within 24h by another operator. |
+| **Operator** | A person with the operator flag: may open, close and review break-glass, and sees the portal's operator pages. |
 | **Anchor** | A signed copy of the audit chain head, to be replicated offsite. |
 | **Audit event** | One append-only, hash-chained row recording who did what to which subject. Never contains payloads. |

@@ -216,7 +216,8 @@ func (r *Reconciler) anchorChain(ctx context.Context) {
 
 // checkBreakglass raises the 24-hour review notice.
 //
-// An unreviewed session also blocks the requester from opening another, but
+// A session past its review window also blocks the requester from opening
+// another (a younger unreviewed one does not), but
 // that block lives on the request path where it can refuse; here the job is to
 // make sure somebody is told, once, rather than discovering it during the next
 // incident.

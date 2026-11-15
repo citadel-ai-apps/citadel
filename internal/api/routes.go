@@ -49,6 +49,7 @@ func (s *Server) routes() {
 	admin.HandleFunc("/principals", s.createPrincipal).Methods(http.MethodPost)
 	admin.HandleFunc("/principals", s.listPrincipals).Methods(http.MethodGet)
 	admin.HandleFunc("/principals/{id}/password", s.setPassword).Methods(http.MethodPost)
+	admin.HandleFunc("/principals/{id}/operator", s.setOperator).Methods(http.MethodPost)
 	admin.HandleFunc("/audit", s.queryAudit).Methods(http.MethodGet)
 	admin.HandleFunc("/audit/verify", s.verifyAudit).Methods(http.MethodGet)
 	admin.HandleFunc("/audit/export", s.exportAudit).Methods(http.MethodGet)
@@ -58,6 +59,7 @@ func (s *Server) routes() {
 	admin.HandleFunc("/tenants/{id}/attestation", s.adminAttestation).Methods(http.MethodPost)
 	admin.HandleFunc("/tenants/{id}/breakglass", s.breakglass).Methods(http.MethodPost)
 	admin.HandleFunc("/grants/{gid}/review", s.reviewBreakglass).Methods(http.MethodPost)
+	admin.HandleFunc("/grants/{gid}/close", s.closeBreakglass).Methods(http.MethodPost)
 	admin.HandleFunc("/grants", s.adminGrants).Methods(http.MethodGet)
 	admin.HandleFunc("/grants/{gid}/approve", s.approveGrant).Methods(http.MethodPost)
 	admin.HandleFunc("/grants/{gid}/deny", s.denyGrant).Methods(http.MethodPost)
@@ -678,11 +680,19 @@ func (s *Server) fleet(w http.ResponseWriter, req *http.Request) {
 		writeErr(w, statusFor(err), err)
 		return
 	}
-	overdueBG, err := store.OverdueBreakglass(ctx, s.db.Reader(), now)
+	unreviewedBG, err := store.UnreviewedBreakglass(ctx, s.db.Reader())
 	if err != nil {
 
 		writeErr(w, statusFor(err), err)
 		return
+	}
+	overdueBG := make([]store.Grant, 0, len(unreviewedBG))
+	for _, g := range unreviewedBG {
+
+		if store.ReviewOverdue(g, now) {
+
+			overdueBG = append(overdueBG, g)
+		}
 	}
 	mismatches, err := store.Mismatches(ctx, s.db.Reader())
 	if err != nil {
@@ -731,7 +741,8 @@ func (s *Server) fleet(w http.ResponseWriter, req *http.Request) {
 		"pending_grants":         pending,
 		"grants_expiring_30d":    expiring,
 		"breakglass_open":        openBG,
-		"breakglass_unreviewed":  overdueBG,
+		"breakglass_unreviewed":  unreviewedBG,
+		"breakglass_overdue":     overdueBG,
 		"attestation_mismatches": mismatches,
 	})
 }

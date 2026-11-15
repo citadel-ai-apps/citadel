@@ -1,0 +1,8 @@
+# buildkitd configuration for the pinned image builder (`make builder`).
+#
+# The builder runs in a container on the host network (--driver-opt
+# network=host), so 127.0.0.1:5000 is the host's local registry (`make
+# registry`). That registry is plain HTTP on loopback.
+[registry."127.0.0.1:5000"]
+  http = true
+  insecure = true

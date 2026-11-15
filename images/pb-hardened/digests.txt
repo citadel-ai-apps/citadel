@@ -2,10 +2,14 @@
 # runtime_version.image_digest (design §5). Append-only; the control
 # plane resolves the LAST matching line for a (version, rev, arch).
 #
-# Builds are reproducible: the base image is pinned by digest and every
-# timestamp is fixed (SOURCE_DATE_EPOCH=0), so rebuilding a (version, rev,
-# arch) gives the same digest and `make image` adds no line. A new line for an
-# existing (version, rev, arch) means an input changed without a rev bump.
+# Builds are reproducible: the base image is pinned by digest, every
+# timestamp is fixed (SOURCE_DATE_EPOCH=0) and, from h3, the builder is one
+# pinned BuildKit (`make builder`), so rebuilding a (version, rev, arch) on any
+# host of that arch gives the same digest and `make image` adds no line. A new
+# line for an existing (version, rev, arch) means an input changed without a
+# rev bump. Before h3 each host's own `docker build` was used and hosts of the
+# same arch disagreed, so an h1/h2 line reproduces only on the host that built
+# it.
 0.22.55 h1 arm64 127.0.0.1:5000/pb-hardened@sha256:9cba095d228db0841f58041de0547681d56cc8d2483521ab506e849830971549
 0.38.2 h1 arm64 127.0.0.1:5000/pb-hardened@sha256:3df9475c7bf9546b46a47ed94f47b7bb5e40f1bd3e2f0e7fb275d38a24831ad6
 0.40.4 h1 arm64 127.0.0.1:5000/pb-hardened@sha256:5775af15f5c4db63a9175340339d840fd4061187774e29db8c959c08923c0bfa
@@ -20,3 +24,13 @@
 0.40.4 h2 amd64 127.0.0.1:5000/pb-hardened@sha256:a164be8a23e4a752c010dbdbfa38402c1bcb3624a2869d1e4624ceca43ad0c73
 0.41.1 h2 amd64 127.0.0.1:5000/pb-hardened@sha256:0b1b7eb7956b75e33bae9017b3418f24f661864a91a0b180710072b4e507c438
 0.42.2 h2 amd64 127.0.0.1:5000/pb-hardened@sha256:501371c40d538d4bb9cdc732c80a9a724d85065691e1299607cc12b9d72741a6
+0.22.55 h3 arm64 127.0.0.1:5000/pb-hardened@sha256:c0f061d6f6fe9bec9aac2b254e65ce3dde7fa70679cc40f5f7680c622e266902
+0.38.2 h3 arm64 127.0.0.1:5000/pb-hardened@sha256:bb59c41862da44430ffa83bc9c81ca391b89533d47166f0dcb50c40b93e03e5f
+0.40.4 h3 arm64 127.0.0.1:5000/pb-hardened@sha256:908d7c9617b477766148594f9b00b11380f0c091fcb70171e1490c94ba540014
+0.41.1 h3 arm64 127.0.0.1:5000/pb-hardened@sha256:e427a329f07bbbe56a8fe0411d77173b9d2fe75981ffb84b4fb3c89e2e1dfab5
+0.42.2 h3 arm64 127.0.0.1:5000/pb-hardened@sha256:40bac5f64e48215bf5d55902ebb15f7a1d104d79eb7f5914e422e7c716f33b1b
+0.22.55 h3 amd64 127.0.0.1:5000/pb-hardened@sha256:e0d57ea827599d06c03f90b847889a3a0a5bd1bdcd7084f00dbd82b49708c232
+0.38.2 h3 amd64 127.0.0.1:5000/pb-hardened@sha256:a6905d59578e12bbf64fffedc45279e76b12648722340f0f760ec8a6f540e5c0
+0.40.4 h3 amd64 127.0.0.1:5000/pb-hardened@sha256:20c7014e355044339cc5a3e71d95f2dc7031418eaae645a78ec11fd972e8e7b3
+0.41.1 h3 amd64 127.0.0.1:5000/pb-hardened@sha256:02623a6872be394689d671b09d8b3c7f86397dae35691b873d961a44cf212d88
+0.42.2 h3 amd64 127.0.0.1:5000/pb-hardened@sha256:157625b23dcc257fa38575443e6a883a52d09d53ea8a7a83cbfa11f3cbf46e2e

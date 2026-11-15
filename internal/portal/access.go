@@ -132,7 +132,7 @@ func (s *Server) access(req *http.Request, t store.Tenant) accessView {
 
 		} else {
 
-			row.Overdue = now.Sub(g.RequestedAt) > store.ReviewWindow
+			row.Overdue = store.ReviewOverdue(g, now)
 		}
 		v.BreakGlass = append(v.BreakGlass, row)
 	}
@@ -163,11 +163,18 @@ type projectRow struct {
 	BreakGlass bool
 }
 
+type reviewRow struct {
+	Grant   store.Grant
+	Open    bool
+	Overdue bool
+}
+
 // attestationsPage is the operator's fleet view of §14.5, mismatches first.
 //
-// It is also where the operator's one per-tenant action lives, the re-check.
-// The tenant page is role-checked like any other principal's, so an operator
-// with no role on a tenant re-checks it from here, without its page.
+// It is also where the operator's per-tenant actions live: the re-check, and,
+// for a named operator, opening, closing and reviewing break-glass. The tenant
+// page is role-checked like any other principal's, so an operator with no role
+// on a tenant acts on it from here; break-glass is what then opens its page.
 func (s *Server) attestationsPage(w http.ResponseWriter, req *http.Request) {
 
 	ctx := req.Context()
@@ -187,6 +194,12 @@ func (s *Server) attestationsPage(w http.ResponseWriter, req *http.Request) {
 	now := time.Now().UTC()
 	openBG, _ := store.OpenBreakglass(ctx, s.db.Reader(), now)
 	overdueBG, _ := store.OverdueBreakglass(ctx, s.db.Reader(), now)
+	unreviewed, _ := store.UnreviewedBreakglass(ctx, s.db.Reader())
+	review := make([]reviewRow, 0, len(unreviewed))
+	for _, g := range unreviewed {
+
+		review = append(review, reviewRow{Grant: g, Open: g.Active(now), Overdue: store.ReviewOverdue(g, now)})
+	}
 
 	anchorAge, head := "never anchored", int64(0)
 	if last, err := store.LatestAnchor(ctx, s.db.Reader()); err == nil {
@@ -227,6 +240,7 @@ func (s *Server) attestationsPage(w http.ResponseWriter, req *http.Request) {
 		"Mismatches":      mismatches,
 		"BreakGlassOpen":  openBG,
 		"BreakGlassLate":  overdueBG,
+		"Unreviewed":      review,
 		"AnchorAge":       anchorAge,
 		"AnchoredSeq":     head,
 		"Notices":         notices,

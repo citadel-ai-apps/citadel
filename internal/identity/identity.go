@@ -56,13 +56,16 @@ const (
 type Principal struct {
 	bun.BaseModel `bun:"table:principal,alias:principal" json:"-"`
 
-	ID          string    `bun:"id,pk" json:"id"`
-	Kind        string    `bun:"kind" json:"kind"`
-	ExternalID  string    `bun:"external_id,nullzero" json:"external_id,omitempty"`
-	Email       string    `bun:"email,nullzero" json:"email,omitempty"`
-	DisplayName string    `bun:"display_name" json:"display_name"`
-	Status      string    `bun:"status" json:"status"`
-	CreatedAt   time.Time `bun:"created_at" json:"created_at"`
+	ID          string `bun:"id,pk" json:"id"`
+	Kind        string `bun:"kind" json:"kind"`
+	ExternalID  string `bun:"external_id,nullzero" json:"external_id,omitempty"`
+	Email       string `bun:"email,nullzero" json:"email,omitempty"`
+	DisplayName string `bun:"display_name" json:"display_name"`
+	Status      string `bun:"status" json:"status"`
+	// Operator (migration 009): a person who may open, close and review
+	// break-glass and sees the portal's operator pages. Persons only.
+	Operator  bool      `bun:"operator" json:"operator,omitempty"`
+	CreatedAt time.Time `bun:"created_at" json:"created_at"`
 }
 
 // OwnerRow is one row of a tenant's ownership history.
@@ -476,6 +479,49 @@ func (s *Service) Suspend(ctx context.Context, tx bun.Tx, actor Actor, principal
 		Action:     auditlog.ActionPrincipalSuspended,
 		SubjectRef: "principal/" + principalID,
 		Detail:     map[string]any{"orphaned_tenants": len(owned)},
+	})
+	return err
+}
+
+var ErrNotPerson = errors.New("identity: only a person can be an operator")
+
+// SetOperator sets or clears a person's operator flag.
+//
+// The flag is what lets someone open break-glass, which is the one path to a
+// tenant's data that needs no role on it, so every change is audited and the
+// chain is its history. Clearing it ends any break-glass access the person
+// holds on their next request: the portal re-reads it every time.
+func (s *Service) SetOperator(ctx context.Context, tx bun.Tx, actor Actor, principalID string, on bool) error {
+
+	var p Principal
+	err := tx.NewSelect().Model(&p).Where("id = ?", principalID).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+
+		return fmt.Errorf("%w: %s", ErrNotFound, principalID)
+	}
+	if err != nil {
+
+		return err
+	}
+	if p.Kind != KindPerson {
+
+		return fmt.Errorf("%w: %s is a %s", ErrNotPerson, p.ID, p.Kind)
+	}
+	if p.Status != StatusActive && on {
+
+		return fmt.Errorf("%w: principal %s is %s", ErrInactive, p.ID, p.Status)
+	}
+	if _, err := tx.NewUpdate().Model((*Principal)(nil)).
+		Set("operator = ?", on).Where("id = ?", p.ID).
+		Exec(ctx); err != nil {
+
+		return err
+	}
+	_, err = s.audit.Append(ctx, tx, auditlog.Event{
+		ActorID: actor.ID, ActorKind: actor.Kind,
+		Action:     auditlog.ActionPrincipalOperator,
+		SubjectRef: "principal/" + p.ID,
+		Detail:     map[string]any{"operator": on, "was": p.Operator},
 	})
 	return err
 }

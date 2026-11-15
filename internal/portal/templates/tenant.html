@@ -6,12 +6,32 @@
   <a href="http://{{.Tenant.Hostname}}/">{{.Tenant.Hostname}}</a> ·
   pocketbase {{.Tenant.RuntimeVersion}} ·
   owner {{.Owner}} ·
-  you are {{.Role}}
+  you are {{label .Role}}
 </p>
+{{with .Breakglass}}
+<div class="flash err breakglass">
+  <strong>Break-glass session <code>{{.ID}}</code></strong> · {{label .Kind}} on {{.Subject}} ·
+  ends {{stamp .ExpiresAt}}, not extendable.<br>
+  Self-approved: your access started when you opened it. Another operator reviews it afterwards, within 24h.<br>
+  Reason shown to the project: {{.Justification}}<br>
+  <span class="hint">The project was told when you opened this. These pages are read-only; deploys, uploads, snapshots,
+    restores and ownership are off. {{if $.Data.CanAdmin}}The PocketBase admin is a superuser session: it can change and
+    delete records. {{end}}Each admin handoff, your first log read and, for a support session, your first page view are on
+    the project's Access tab.</span>
+  <form method="post" action="/breakglass/{{.ID}}/close" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button type="submit">End session now</button>
+  </form>
+</div>
+{{end}}
 {{if .CanAdmin}}
 <form method="post" action="/t/{{.Tenant.ID}}/admin" target="_blank" class="inline">
   <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  {{if .Breakglass}}
+  <button type="submit" title="Signs you in to /_/ as the owner seat, a superuser who can change and delete records, for at most 15 minutes and never past the session; recorded on this project's Access tab">Open PocketBase admin (break-glass, read-write)</button>
+  {{else}}
   <button type="submit" title="Signs you in to /_/ as a superuser with this portal login">Open PocketBase admin</button>
+  {{end}}
 </form>
 {{end}}
 

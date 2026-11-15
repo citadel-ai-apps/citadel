@@ -27,6 +27,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -34,6 +35,7 @@ import (
 	"github.com/citadel-ai-apps/citadel/internal/attest"
 	"github.com/citadel-ai-apps/citadel/internal/auditlog"
 	"github.com/citadel-ai-apps/citadel/internal/authn"
+	"github.com/citadel-ai-apps/citadel/internal/breakglass"
 	"github.com/citadel-ai-apps/citadel/internal/config"
 	dockerdrv "github.com/citadel-ai-apps/citadel/internal/driver/docker"
 	"github.com/citadel-ai-apps/citadel/internal/hostfs"
@@ -70,6 +72,13 @@ type Server struct {
 	log      *slog.Logger
 	tpl      *template.Template
 	router   *mux.Router
+	bg       *breakglass.Service
+
+	// bgAudited is the (grant, action) pairs already audited under a
+	// break-glass session: the first page view of an impersonation, the first
+	// log read. Pages are reloaded and the log tail polls every few seconds; one
+	// row per session says who looked without burying the tenant's access log.
+	bgAudited sync.Map
 
 	throttle  *loginThrottle
 	hashSlots hashSlots
@@ -121,6 +130,7 @@ func New(o Options) (*Server, error) {
 		api: o.API, attest: o.Attest, signer: o.Signer,
 		log: o.Log, tpl: tpl, router: mux.NewRouter(),
 		throttle: newLoginThrottle(), hashSlots: make(hashSlots, concurrentHashes),
+		bg: breakglass.New(o.DB, o.Audit),
 	}
 	dummy, err := authn.HashPassword(rand.Text())
 	if err != nil {
@@ -151,11 +161,15 @@ func (s *Server) routes() {
 	in.HandleFunc("/", s.tenantsPage).Methods(http.MethodGet)
 	in.HandleFunc("/grants", s.grantQueuePage).Methods(http.MethodGet)
 	in.HandleFunc("/attestations", s.attestationsPage).Methods(http.MethodGet)
-	// The one operator action on a tenant lives under /attestations, not /t/:
-	// every /t/ route is role-checked, and the operator has no role on most
-	// tenants. Grant decisions and break-glass are not here at all: they need a
-	// named person (INV-16), and the portal's operator is the platform principal.
+	// Operator actions on a tenant live under /attestations, not /t/: every /t/
+	// route is role-checked, and the operator has no role on most tenants. The
+	// re-check is for any operator; break-glass is for a named person with the
+	// operator flag (INV-16), never the shared platform login. Tier-2 grant
+	// decisions are still citadel on the host.
 	in.HandleFunc("/attestations/{id}/check", s.attestNow).Methods(http.MethodPost)
+	in.HandleFunc("/attestations/{id}/breakglass", s.openBreakglass).Methods(http.MethodPost)
+	in.HandleFunc("/breakglass/{gid}/review", s.reviewBreakglass).Methods(http.MethodPost)
+	in.HandleFunc("/breakglass/{gid}/close", s.closeBreakglass).Methods(http.MethodPost)
 	in.HandleFunc("/t/{id}", s.tenantPage).Methods(http.MethodGet)
 	in.HandleFunc("/t/{id}/logs", s.tenantLogs).Methods(http.MethodGet)
 	in.HandleFunc("/t/{id}/upload", s.upload).Methods(http.MethodPost)

@@ -80,9 +80,9 @@ func TestEveryTemplateRenders(t *testing.T) {
 		{"login.html", page{Title: "Sign in", Data: map[string]string{"Next": "/t/demo"}}, "Principal"},
 		{"tenants.html", page{
 			Title: "Projects", Actor: identity.Actor{ID: "person:alice", Kind: identity.KindPerson}, CSRF: "csrf",
-			Data: []tenantRow{{Tenant: tenant, Role: "owner", State: store.ObservedHealthy}},
+			Data: map[string]any{"Projects": []tenantRow{{Tenant: tenant, Role: "owner", State: store.ObservedHealthy}}},
 		}, "demo.apps.localhost"},
-		{"tenants.html empty", page{Title: "Projects", Actor: identity.Actor{ID: "person:alice"}, Data: []tenantRow{}}, "No projects yet"},
+		{"tenants.html empty", page{Title: "Projects", Actor: identity.Actor{ID: "person:alice"}, Data: map[string]any{"Projects": []tenantRow{}}}, "No projects yet"},
 		{"tenant.html", page{
 			Title: "demo", Actor: identity.Actor{ID: "person:bob", Kind: identity.KindPerson}, CSRF: "csrf", Data: view,
 		}, "Accept ownership"},

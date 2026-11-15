@@ -33,7 +33,7 @@ OTHER_DOMAIN="${OTHER_DOMAIN:-www.google.com}"
 # distro images ship Squid without --with-openssl and reject `at_step`, so a
 # probe with its own default would answer a question about a different binary
 # than the one in production. `make egress-image` builds this one.
-IMAGE="${EGRESS_PROXY_IMAGE:-v2p-squid:6-r2}"
+IMAGE="${EGRESS_PROXY_IMAGE:-v2p-squid:6-r3}"
 # The capabilities the platform gives the real proxy. Squid needs them to drop
 # privileges and to read the port's certificate; a parse or a run with fewer
 # answers a question about a different environment.

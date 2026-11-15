@@ -53,7 +53,7 @@ start_squid() {
     docker run -d --rm --name "${NP_PREFIX}-squid" \
         --network "${NP_PREFIX}-egress" --ip "$PROXY_IP" \
         -v /tmp/npr-squid.conf:/etc/squid/squid.conf:ro \
-        "${EGRESS_PROXY_IMAGE:-v2p-squid:6-r2}" \
+        "${EGRESS_PROXY_IMAGE:-v2p-squid:6-r3}" \
         -f /etc/squid/squid.conf >/dev/null
     for _ in $(seq 1 20); do
         docker logs "${NP_PREFIX}-squid" 2>&1 | grep -q "Accepting HTTP Socket" && return 0

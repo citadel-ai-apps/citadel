@@ -60,7 +60,7 @@ func TestMigrationsAreIdempotentAcrossReopens(t *testing.T) {
 // asserted rather than derived so adding a migration is a deliberate edit here
 // too: a migration that silently re-runs would fail on 001's platform-principal
 // insert, and this test is what catches that.
-const migrationCount = 8
+const migrationCount = 9
 
 func appliedMigrations(t *testing.T, db *store.DB) int {
 

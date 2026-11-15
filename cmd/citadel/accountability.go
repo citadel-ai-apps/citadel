@@ -66,7 +66,7 @@ func (c *client) breakglass(ctx context.Context, args []string) error {
 
 	if len(args) == 0 {
 
-		return errors.New("breakglass needs a subcommand: open|review|list")
+		return errors.New("breakglass needs a subcommand: open|review|close|list")
 	}
 	sub, rest := args[0], args[1:]
 
@@ -158,7 +158,50 @@ func (c *client) breakglass(ctx context.Context, args []string) error {
 		return c.emit(raw, func([]byte) error {
 
 			fmt.Printf("reviewed %s: %s\n", gid, outcome)
-			fmt.Println("  the operator who opened it can open break-glass again")
+			fmt.Println("  if it was past its 24h review window, it no longer blocks its opener")
+			return nil
+		})
+
+	case "close":
+		var gid, reason string
+		for i := 0; i < len(rest); i++ {
+
+			var err error
+			switch rest[i] {
+
+			case "--reason":
+				reason, err = next(rest, &i, "--reason")
+			default:
+				if gid != "" {
+
+					err = fmt.Errorf("unexpected argument %q", rest[i])
+
+				} else {
+
+					gid = rest[i]
+				}
+			}
+			if err != nil {
+
+				return err
+			}
+		}
+		if gid == "" {
+
+			return errors.New("breakglass close needs <grant-id>")
+		}
+		raw, err := c.call(ctx, http.MethodPost, "/api/v1/admin/grants/"+gid+"/close",
+			map[string]string{"reason": reason})
+		if err != nil {
+
+			return err
+		}
+		return c.emit(raw, func([]byte) error {
+
+			fmt.Printf("closed %s\n", gid)
+			fmt.Println("  portal access ends now; the tenant has been told")
+			fmt.Println("  an admin UI tab opened from it keeps working until its token lapses (at most 15 minutes)")
+			fmt.Println("  another operator still reviews it, within 24h of when it was opened")
 			return nil
 		})
 

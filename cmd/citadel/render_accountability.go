@@ -129,7 +129,7 @@ func renderBreakglass(b []byte) error {
 
 	var payload struct {
 		Open       []store.Grant `json:"open"`
-		Unreviewed []store.Grant `json:"unreviewed_past_24h"`
+		Unreviewed []store.Grant `json:"unreviewed"`
 	}
 	if err := json.Unmarshal(b, &payload); err != nil {
 
@@ -157,13 +157,19 @@ func renderBreakglass(b []byte) error {
 	}
 	if len(payload.Unreviewed) > 0 {
 
-		fmt.Println("\nPAST THE 24H REVIEW — these block their requester from opening another")
+		fmt.Println("\nNOT YET REVIEWED — OVERDUE ones (past 24h) block their opener from opening another")
+		now := time.Now()
 		w := tw()
-		fmt.Fprintln(w, "GRANT\tTENANT\tOPENED BY\tOPENED\tREASON")
+		fmt.Fprintln(w, "GRANT\tTENANT\tOPENED BY\tOPENED\tREVIEW\tREASON")
 		for _, g := range payload.Unreviewed {
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", g.ID, g.TenantID, g.RequestedBy,
-				g.RequestedAt.UTC().Format(time.RFC3339), g.Justification)
+			due := "due " + g.RequestedAt.Add(store.ReviewWindow).UTC().Format(time.RFC3339)
+			if store.ReviewOverdue(g, now) {
+
+				due = "OVERDUE"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", g.ID, g.TenantID, g.RequestedBy,
+				g.RequestedAt.UTC().Format(time.RFC3339), due, g.Justification)
 		}
 		if err := w.Flush(); err != nil {
 
@@ -180,6 +186,7 @@ func renderBreakglassOpen(b []byte) error {
 		Grant     store.Grant `json:"grant"`
 		ExpiresAt time.Time   `json:"expires_at"`
 		ReviewDue time.Time   `json:"review_due"`
+		Portal    string      `json:"portal_path"`
 	}
 	if err := json.Unmarshal(b, &payload); err != nil {
 
@@ -189,7 +196,12 @@ func renderBreakglassOpen(b []byte) error {
 		payload.Grant.ID, payload.Grant.TenantID, payload.ExpiresAt.UTC().Format(time.RFC3339))
 	fmt.Println("  the tenant has already been told, with your reason verbatim")
 	fmt.Println("  not extendable: request again if 60 minutes is not enough")
-	fmt.Printf("  review due by %s, by somebody other than you\n",
+	if payload.Portal != "" {
+
+		fmt.Printf("  sign in to the portal as %s and open %s; end it early with `citadel breakglass close %s`\n",
+			payload.Grant.RequestedBy, payload.Portal, payload.Grant.ID)
+	}
+	fmt.Printf("  self-approved: access is open now; somebody other than you reviews it afterwards, by %s\n",
 		payload.ReviewDue.UTC().Format(time.RFC3339))
 	return nil
 }

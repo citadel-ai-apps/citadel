@@ -234,3 +234,42 @@ func (s *Server) setPassword(w http.ResponseWriter, req *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"principal": p.ID, "password_set": true})
 }
+
+// SetOperatorRequest is POST /admin/principals/{id}/operator.
+type SetOperatorRequest struct {
+	Operator bool `json:"operator"`
+}
+
+// setOperator sets or clears a person's operator flag (identity.SetOperator).
+// Socket-only, like every /admin route.
+func (s *Server) setOperator(w http.ResponseWriter, req *http.Request) {
+
+	ctx := req.Context()
+	actor, err := s.actor(ctx, req)
+	if err != nil {
+
+		writeErr(w, statusFor(err), err)
+		return
+	}
+	var body SetOperatorRequest
+	if err := decodeBody(req, &body); err != nil {
+
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	id, err := identity.Canonical(mux.Vars(req)["id"])
+	if err != nil {
+
+		writeErr(w, statusFor(err), err)
+		return
+	}
+	if err := s.db.Tx(ctx, func(tx bun.Tx) error {
+
+		return s.ident.SetOperator(ctx, tx, actor, id, body.Operator)
+	}); err != nil {
+
+		writeErr(w, statusFor(err), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"principal": id, "operator": body.Operator})
+}

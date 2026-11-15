@@ -36,7 +36,11 @@ authorised what.
   instead.
 - **Accountability.** Each tenant has exactly one owner, with ownership kept as
   a history. Access is granted in tiers (auto, named approver, break-glass),
-  every grant expires, and break-glass notifies the tenant at grant time.
+  and every grant expires. Break-glass is how a named operator reaches a
+  tenant without host root: self-approved and immediate, 60 minutes of
+  read-only portal pages, optionally with a superuser PocketBase session, the
+  tenant notified at grant time and the session reviewed afterwards by another
+  operator.
 - **A checkable audit log.** The log is append-only and hash-chained, and chain
   heads are signed. Attestations are derived from the **host**, not the
   database, and a divergence raises an alert, never a silent repair.
@@ -139,7 +143,7 @@ hack/in-vm.sh make probe-image    # PROBE IMAGE DIGEST: 127.0.0.1:5000/rehearse-
 The digests files are resolved relative to the daemon's working directory (the
 repo root in development). On a host where nothing has been built, the daemon
 falls back to the unpinned tags `caddy:2` (no rate_limit handler, so the fleet view
-reports `rate_limit` drift) and `v2p-squid:6-r2`, and logs a warning naming the
+reports `rate_limit` drift) and `v2p-squid:6-r3`, and logs a warning naming the
 build that fixes it. The probe has no fallback: without one, upgrades cannot be
 rehearsed, and the daemon warns about that too. A tag set explicitly in the config is refused unless
 `allow_unpinned_images` is set. A container running a different image is recreated
@@ -215,15 +219,34 @@ hack/in-vm.sh bin/citadel audit verify         # is the record itself still trus
 hack/in-vm.sh bin/citadel tenant status demo   # intent vs. what the host shows
 ```
 
-The portal's `/fleet` page is for the `platform` principal only. It is
-deliberately not published through the edge, which joins every tenant network.
-In the portal, `platform` opens only the projects it holds a role on (orphan
-custody), like any other principal. Its pages are read-only apart from the
-on-demand re-check on `/attestations`. Tier-2 decisions, break-glass and its
-review need a named person (INV-16), so they are `citadel` commands on the host.
+The portal's operator pages (`/fleet`, `/attestations`) are for the `platform`
+principal and for named operators. The portal is deliberately not published
+through the edge, which joins every tenant network. In the portal, `platform`
+opens only the projects it holds a role on (orphan custody), like any other
+principal. Its pages are read-only apart from the on-demand re-check on
+`/attestations`.
+
+A named operator is a person with the operator flag. Break-glass and its review
+need one (INV-16). On `/attestations` they open a session on a project, giving a
+reason and their password again. For 60 minutes they then see that project's
+pages read-only. An `operator_data_access` session on `pb_data` can also open
+PocketBase `/_/` as a superuser, which can change and delete records, with a
+token that cannot outlive the session. Access starts when the session is
+opened; nobody approves it first. The tenant is told at once, in those terms,
+and another operator reviews it afterwards, there or with
+`citadel breakglass review`. Operators only ever type their portal password on
+the portal itself: the admin handoff ends on the tenant's hostname, which the
+tenant controls (design §16). Tier-2 decisions are still `citadel` commands on
+the host.
 
 ```sh
 hack/in-vm.sh bin/citadel principal set-password platform --password <secret>
+
+hack/in-vm.sh bin/citadel principal create person:alice
+hack/in-vm.sh bin/citadel principal set-password person:alice --password <secret>
+hack/in-vm.sh bin/citadel principal operator person:alice --on
+hack/in-vm.sh bin/citadel breakglass open demo --reason "…" --as person:alice   # or from the portal
+hack/in-vm.sh bin/citadel breakglass close <grant-id> --as person:alice
 ```
 
 ### The tenant portal

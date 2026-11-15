@@ -19,6 +19,8 @@ const (
 	NotifyGrantDecided        = "grant.decided"
 	NotifyBreakglassOpened    = "breakglass.opened"
 	NotifyBreakglassOverdue   = "breakglass.overdue"
+	NotifyBreakglassReviewed  = "breakglass.reviewed"
+	NotifyBreakglassClosed    = "breakglass.closed"
 	NotifyTransferOffered     = "transfer.offered"
 	NotifyGrantReaffirmDue    = "grant.reaffirm_due"
 	NotifyAttestationMismatch = "attestation.mismatch"
@@ -40,8 +42,9 @@ const (
 //
 // PrincipalID empty means "whoever holds a role on this tenant today", so a
 // notice reaches the person accountable now rather than the one who was when it
-// was written. TenantID empty is a platform-wide notice — how the second
-// operator hears about a break-glass session.
+// was written. An operator-audience notice reaches every operator whatever its
+// TenantID, which names the tenant it concerns; that is how the other
+// operators hear about a break-glass session.
 type Notification struct {
 	bun.BaseModel `bun:"table:notification,alias:notification" json:"-"`
 

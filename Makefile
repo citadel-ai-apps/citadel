@@ -8,21 +8,56 @@
 #   make licenses                                # fail on any non-permissive Go dependency
 #
 #   make registry                                # local zot on 127.0.0.1:5000
-#   make image PB_VERSION=0.42.2 HARDENING_REV=2 # build+push one image, print digest
-#   make image-matrix HARDENING_REV=2            # every version in versions.txt
+#   make builder                                 # the pinned BuildKit every image is built with
+#   make image PB_VERSION=0.42.2 HARDENING_REV=3 # build+push one image, print digest
+#   make image-matrix HARDENING_REV=3            # every version in versions.txt
 #   make smoke PB_VERSION=0.42.2                 # image self-checks, by digest
 #   make edge-image                              # Caddy + rate-limit module, by digest
 #   make egress-image                            # Squid WITH OpenSSL (ssl_bump needs it)
 #   make probe-image                             # FROM-scratch rehearsal probe (§12), by digest
 
 REGISTRY      ?= 127.0.0.1:5000
-HARDENING_REV ?= 2
+HARDENING_REV ?= 3
 IMG_DIR       := images/pb-hardened
 DIGESTS       := $(IMG_DIR)/digests.txt
 # Fixed, not the commit time: the image config's created date and history are
 # then a function of the inputs only, so a rebuild reproduces the digest and
 # digests.txt gains no line. The Containerfiles pin file mtimes to the same 0.
 SOURCE_DATE_EPOCH := 0
+
+# The builder is an input too. A plain `docker build` uses whatever BuildKit the
+# host's Docker ships, and its image store decides the manifest format, so two
+# hosts of the same arch built different digests from identical inputs: each
+# appended its own line, in-vm.sh pulled it back, and digests.txt never stayed
+# clean. Every image is therefore built by ONE pinned BuildKit, run in a
+# container (buildx docker-container driver) on the host network, and pushed
+# straight to the registry with the timestamps rewritten to SOURCE_DATE_EPOCH,
+# OCI media types and fixed compression. The host's engine version and image
+# store no longer reach the bytes. Moving BUILDKIT_IMAGE changes every digest:
+# bump every image's rev with it.
+BUILDKIT_IMAGE  ?= moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb
+BUILDER         ?= citadel-repro
+BUILDKITD_TOML  := deploy/buildkit/buildkitd.toml
+REPRO_OUTPUT    := push=true,rewrite-timestamp=true,oci-mediatypes=true,compression=gzip,compression-level=9,force-compression=true
+
+# $(call repro_build,<repo>,<tag>,<Containerfile>,<context>,<extra args>,<digests file>,<line prefix>)
+# builds, pushes, and appends "<line prefix> $(ARCH) <repo>@<digest>" to the
+# digests file unless that exact digest is already recorded. The digest is
+# BuildKit's own (containerimage.digest), not one the daemon recomputed.
+define repro_build
+	@meta=$$(mktemp); trap 'rm -f "$$meta"' EXIT; \
+	 docker buildx build --builder $(BUILDER) --platform linux/$(ARCH) \
+	   --provenance=false --sbom=false \
+	   --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(5) \
+	   -f $(3) --metadata-file "$$meta" \
+	   --output type=image,name=$(1):$(2),$(REPRO_OUTPUT) \
+	   $(4) || exit 1; \
+	 sum=$$(sed -n 's/.*"containerimage.digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' "$$meta" | head -1); \
+	 test -n "$$sum" || { echo "no containerimage.digest in the build metadata"; exit 1; }; \
+	 digest="$(1)@$$sum"; \
+	 grep -qF "$$digest" $(6) 2>/dev/null || echo "$(7) $(ARCH) $$digest" >> $(6); \
+	 echo "IMAGE DIGEST: $$digest"
+endef
 
 # uname -m → Docker/PB arch name
 UNAME_M := $(shell uname -m)
@@ -37,31 +72,32 @@ endif
 REPO := $(REGISTRY)/pb-hardened
 TAG  := $(PB_VERSION)-h$(HARDENING_REV)
 
-.PHONY: image image-matrix edge-image egress-image probe-image registry smoke
+.PHONY: image image-matrix edge-image egress-image probe-image registry smoke builder
 
-image:
+# The pinned builder. Recreated when it exists but runs anything else, so a
+# host that once had a different BUILDKIT_IMAGE cannot quietly keep it.
+builder:
+	@if docker buildx inspect $(BUILDER) >/dev/null 2>&1 && \
+	    ! docker buildx inspect $(BUILDER) | grep -qF '$(lastword $(subst @, ,$(BUILDKIT_IMAGE)))'; then \
+	   echo "builder $(BUILDER) is not on $(BUILDKIT_IMAGE); recreating"; \
+	   docker buildx rm $(BUILDER) >/dev/null; \
+	 fi; \
+	 docker buildx inspect $(BUILDER) >/dev/null 2>&1 || \
+	   docker buildx create --name $(BUILDER) --driver docker-container \
+	     --driver-opt image=$(BUILDKIT_IMAGE) --driver-opt network=host \
+	     --buildkitd-config $(BUILDKITD_TOML) --bootstrap >/dev/null; \
+	 echo "builder $(BUILDER) on $(BUILDKIT_IMAGE)"
+
+image: builder
 ifndef PB_VERSION
 	$(error PB_VERSION is required, e.g. make image PB_VERSION=0.42.2)
 endif
 	@test -f $(IMG_DIR)/checksums/pocketbase_$(PB_VERSION)_linux_$(ARCH).sha256 || \
 	  { echo "no pinned checksum for $(PB_VERSION)/$(ARCH); run $(IMG_DIR)/fetch-checksum.sh $(PB_VERSION)"; exit 1; }
-	docker build \
-	  --provenance=false \
-	  --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
-	  -f $(IMG_DIR)/Containerfile \
-	  --build-arg PB_VERSION=$(PB_VERSION) \
-	  --build-arg HARDENING_REV=$(HARDENING_REV) \
-	  --build-arg PB_SHA256=$$(cut -d' ' -f1 $(IMG_DIR)/checksums/pocketbase_$(PB_VERSION)_linux_$(ARCH).sha256) \
-	  -t $(REPO):$(TAG) \
-	  .
-	docker push $(REPO):$(TAG)
 	@# The digest, not the tag, is what the control plane will schedule.
-	@digest=$$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' $(REPO):$(TAG) \
-	           | grep '^$(REPO)@' | head -1); \
-	 test -n "$$digest" || { echo "no repo digest found after push"; exit 1; }; \
-	 grep -qF "$$digest" $(DIGESTS) 2>/dev/null || \
-	   echo "$(PB_VERSION) h$(HARDENING_REV) $(ARCH) $$digest" >> $(DIGESTS); \
-	 echo "IMAGE DIGEST: $$digest"
+	$(call repro_build,$(REPO),$(TAG),$(IMG_DIR)/Containerfile,., \
+	  --build-arg PB_VERSION=$(PB_VERSION) --build-arg HARDENING_REV=$(HARDENING_REV) \
+	  --build-arg PB_SHA256=$$(cut -d' ' -f1 $(IMG_DIR)/checksums/pocketbase_$(PB_VERSION)_linux_$(ARCH).sha256),$(DIGESTS),$(PB_VERSION) h$(HARDENING_REV))
 
 # The edge proxy, with the rate-limit module compiled in (§10). Built and
 # pushed by digest like pb-hardened: the control plane schedules digests, never
@@ -69,24 +105,11 @@ endif
 EDGE_DIR      := images/edge-caddy
 EDGE_DIGESTS  := $(EDGE_DIR)/digests.txt
 CADDY_VERSION ?= 2.10.2
-RATELIMIT_REV ?= 1
+RATELIMIT_REV ?= 2
 
-edge-image:
-	docker build \
-	  --provenance=false \
-	  --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
-	  -f $(EDGE_DIR)/Containerfile \
-	  --build-arg CADDY_VERSION=$(CADDY_VERSION) \
-	  -t $(REGISTRY)/edge-caddy:$(CADDY_VERSION)-r$(RATELIMIT_REV) \
-	  $(EDGE_DIR)
-	docker push $(REGISTRY)/edge-caddy:$(CADDY_VERSION)-r$(RATELIMIT_REV)
-	@digest=$$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-	             $(REGISTRY)/edge-caddy:$(CADDY_VERSION)-r$(RATELIMIT_REV) \
-	           | grep '^$(REGISTRY)/edge-caddy@' | head -1); \
-	 test -n "$$digest" || { echo "no repo digest found after push"; exit 1; }; \
-	 grep -qF "$$digest" $(EDGE_DIGESTS) 2>/dev/null || \
-	   echo "$(CADDY_VERSION) r$(RATELIMIT_REV) $(ARCH) $$digest" >> $(EDGE_DIGESTS); \
-	 echo "EDGE IMAGE DIGEST: $$digest"
+edge-image: builder
+	$(call repro_build,$(REGISTRY)/edge-caddy,$(CADDY_VERSION)-r$(RATELIMIT_REV),$(EDGE_DIR)/Containerfile,$(EDGE_DIR), \
+	  --build-arg CADDY_VERSION=$(CADDY_VERSION),$(EDGE_DIGESTS),$(CADDY_VERSION) r$(RATELIMIT_REV))
 
 # The rehearsal probe (§12). A FROM-scratch image holding one static binary,
 # which is the only thing that can check an upgrade rehearsal: the rehearsal
@@ -98,23 +121,10 @@ edge-image:
 # default probe_image from digests.txt for the host's architecture.
 PROBE_DIR     := images/rehearse-probe
 PROBE_DIGESTS := $(PROBE_DIR)/digests.txt
-PROBE_REV     ?= 2
+PROBE_REV     ?= 3
 
-probe-image:
-	docker build \
-	  --provenance=false \
-	  --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
-	  -f $(PROBE_DIR)/Containerfile \
-	  -t $(REGISTRY)/rehearse-probe:r$(PROBE_REV) \
-	  .
-	docker push $(REGISTRY)/rehearse-probe:r$(PROBE_REV)
-	@digest=$$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-	             $(REGISTRY)/rehearse-probe:r$(PROBE_REV) \
-	           | grep '^$(REGISTRY)/rehearse-probe@' | head -1); \
-	 test -n "$$digest" || { echo "no repo digest found after push"; exit 1; }; \
-	 grep -qF "$$digest" $(PROBE_DIGESTS) 2>/dev/null || \
-	   echo "r$(PROBE_REV) $(ARCH) $$digest" >> $(PROBE_DIGESTS); \
-	 echo "PROBE IMAGE DIGEST: $$digest"
+probe-image: builder
+	$(call repro_build,$(REGISTRY)/rehearse-probe,r$(PROBE_REV),$(PROBE_DIR)/Containerfile,.,,$(PROBE_DIGESTS),r$(PROBE_REV))
 
 # The egress forward proxy (§9.4). Built rather than pulled because the distro
 # images that are easy to pull are built without OpenSSL, and a Squid without
@@ -125,22 +135,29 @@ probe-image:
 # local v2p-squid tag is kept for the netprobe scripts that run Squid by hand.
 PROXY_DIR     := images/egress-proxy
 PROXY_DIGESTS := $(PROXY_DIR)/digests.txt
-PROXY_REV     ?= 2
+PROXY_REV     ?= 3
 PROXY_TAG     ?= v2p-squid:6-r$(PROXY_REV)
 PROXY_REF     := $(REGISTRY)/egress-proxy:6-r$(PROXY_REV)
 
-egress-image:
-	docker build \
-	  --provenance=false \
-	  --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
-	  -f $(PROXY_DIR)/Containerfile \
-	  -t $(PROXY_TAG) -t $(PROXY_REF) \
-	  $(PROXY_DIR)
-	docker push $(PROXY_REF)
-	@squid=$$(docker run --rm --entrypoint squid $(PROXY_REF) -v | sed -n '1s/.*Version \([0-9.]*\).*/\1/p'); \
-	 digest=$$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' $(PROXY_REF) \
-	           | grep '^$(REGISTRY)/egress-proxy@' | head -1); \
-	 test -n "$$digest" || { echo "no repo digest found after push"; exit 1; }; \
+# The line prefix is the Squid version, which is only known once the image
+# exists, so this one cannot use repro_build's single append: it builds and
+# pushes with the same pinned builder and output, pulls the result back by
+# digest to read the version and to give the netprobe scripts their local tag,
+# then records it.
+egress-image: builder
+	@meta=$$(mktemp); trap 'rm -f "$$meta"' EXIT; \
+	 docker buildx build --builder $(BUILDER) --platform linux/$(ARCH) \
+	   --provenance=false --sbom=false \
+	   --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+	   -f $(PROXY_DIR)/Containerfile --metadata-file "$$meta" \
+	   --output type=image,name=$(PROXY_REF),$(REPRO_OUTPUT) \
+	   $(PROXY_DIR) || exit 1; \
+	 sum=$$(sed -n 's/.*"containerimage.digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' "$$meta" | head -1); \
+	 test -n "$$sum" || { echo "no containerimage.digest in the build metadata"; exit 1; }; \
+	 digest="$(REGISTRY)/egress-proxy@$$sum"; \
+	 docker pull -q "$$digest" >/dev/null && docker tag "$$digest" $(PROXY_TAG) && docker tag "$$digest" $(PROXY_REF) || exit 1; \
+	 squid=$$(docker run --rm --entrypoint squid "$$digest" -v | sed -n '1s/.*Version \([0-9.]*\).*/\1/p'); \
+	 test -n "$$squid" || { echo "cannot read the Squid version from $$digest"; exit 1; }; \
 	 grep -qF "$$digest" $(PROXY_DIGESTS) 2>/dev/null || \
 	   echo "$$squid r$(PROXY_REV) $(ARCH) $$digest" >> $(PROXY_DIGESTS); \
 	 echo "EGRESS PROXY IMAGE DIGEST: $$digest (squid $$squid)"

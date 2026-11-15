@@ -25,6 +25,7 @@ import (
 	"github.com/citadel-ai-apps/citadel/internal/auditlog"
 	"github.com/citadel-ai-apps/citadel/internal/authn"
 	"github.com/citadel-ai-apps/citadel/internal/backup"
+	"github.com/citadel-ai-apps/citadel/internal/breakglass"
 	"github.com/citadel-ai-apps/citadel/internal/config"
 	dockerdrv "github.com/citadel-ai-apps/citadel/internal/driver/docker"
 	"github.com/citadel-ai-apps/citadel/internal/hostfs"
@@ -50,6 +51,7 @@ type Server struct {
 	rec    *reconcile.Reconciler
 	drv    *dockerdrv.Driver
 	audit  *auditlog.Logger
+	bg     *breakglass.Service
 	log    *slog.Logger
 	router *mux.Router
 
@@ -89,6 +91,7 @@ func New(o Options) *Server {
 		bkp: o.Backups, rec: o.Reconciler,
 		drv: o.Driver, audit: o.Audit, log: o.Log, router: mux.NewRouter(),
 		attest: o.Attest, signer: o.Signer,
+		bg: breakglass.New(o.DB, o.Audit),
 	}
 	s.routes()
 	return s
@@ -239,8 +242,15 @@ func statusFor(err error) int {
 		errors.Is(err, reconcile.ErrFrozen),
 		errors.Is(err, reconcile.ErrPinNeedsStopped),
 		errors.Is(err, store.ErrHardeningRegress),
-		errors.Is(err, reconcile.ErrTooManyUpgrades):
+		errors.Is(err, reconcile.ErrTooManyUpgrades),
+		errors.Is(err, breakglass.ErrBlocked),
+		errors.Is(err, breakglass.ErrReviewed),
+		errors.Is(err, breakglass.ErrEnded):
 		return http.StatusConflict
+	case errors.Is(err, breakglass.ErrInvalid),
+		errors.Is(err, breakglass.ErrNotBreakglass),
+		errors.Is(err, identity.ErrNotPerson):
+		return http.StatusBadRequest
 	case errors.Is(err, identity.ErrForbidden),
 		errors.Is(err, identity.ErrInactive),
 		errors.Is(err, identity.ErrNotTransferee):

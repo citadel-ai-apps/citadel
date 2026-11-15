@@ -125,8 +125,34 @@ type account struct {
 	secret              string
 }
 
-// Mint signs a superuser token valid for ttl.
+// ErrNotTimeBoxable is MintStatic on a pre-0.23 runtime, whose admin tokens
+// carry no refreshable claim: the admin UI would renew one for as long as the
+// tab stays open, so no expiry the caller sets would hold.
+var ErrNotTimeBoxable = errors.New("pbauth: this PocketBase version cannot issue a token that stops at a set time")
+
+// Mint signs a superuser token valid for ttl. The admin UI refreshes it into an
+// ordinary session.
 func Mint(ctx context.Context, src Source, sel Selector, ttl time.Duration) (Token, error) {
+
+	return mint(ctx, src, sel, ttl, true)
+}
+
+// MintStatic signs a superuser token that dies at ttl: refreshable is false, so
+// PocketBase's auth-refresh hands the same token back instead of a new one, and
+// the admin UI session ends when it does. This is what break-glass hands an
+// operator — PocketBase's own impersonation tokens work the same way.
+//
+// 0.23+ only; ErrNotTimeBoxable otherwise.
+func MintStatic(ctx context.Context, src Source, sel Selector, ttl time.Duration) (Token, error) {
+
+	if IsLegacy(src.PBVersion) {
+
+		return Token{}, ErrNotTimeBoxable
+	}
+	return mint(ctx, src, sel, ttl, false)
+}
+
+func mint(ctx context.Context, src Source, sel Selector, ttl time.Duration, refreshable bool) (Token, error) {
 
 	if ttl <= 0 {
 
@@ -157,7 +183,7 @@ func Mint(ctx context.Context, src Source, sel Selector, ttl time.Duration) (Tok
 		}
 		claims = map[string]any{
 			"id": acc.id, "type": "auth", "collectionId": acc.collectionID,
-			"refreshable": true, "exp": exp,
+			"refreshable": refreshable, "exp": exp,
 		}
 	}
 	tok, err := signHS256(claims, key)

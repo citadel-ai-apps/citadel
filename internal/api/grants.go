@@ -10,6 +10,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/citadel-ai-apps/citadel/internal/auditlog"
+	"github.com/citadel-ai-apps/citadel/internal/breakglass"
 	"github.com/citadel-ai-apps/citadel/internal/grantpolicy"
 	"github.com/citadel-ai-apps/citadel/internal/identity"
 	"github.com/citadel-ai-apps/citadel/internal/reconcile"
@@ -93,7 +94,7 @@ func (s *Server) requestGrant(w http.ResponseWriter, req *http.Request) {
 	if d.Tier == grantpolicy.TierBreakGlass {
 
 		writeErr(w, http.StatusForbidden, fmt.Errorf(
-			"api: %s is break-glass; an operator opens it with `citadel breakglass`, never as an ordinary grant", body.Kind))
+			"api: %s is break-glass; a named operator opens it with `citadel breakglass` or from the portal, never as an ordinary grant", body.Kind))
 		return
 	}
 
@@ -182,6 +183,11 @@ func (s *Server) revokeGrant(w http.ResponseWriter, req *http.Request) {
 	if g.TenantID != t.ID {
 
 		writeErr(w, http.StatusNotFound, fmt.Errorf("%w: %s", store.ErrGrantNotFound, g.ID))
+		return
+	}
+	if g.Tier == grantpolicy.TierBreakGlass {
+
+		writeErr(w, http.StatusForbidden, breakglass.ErrTenantRevoke)
 		return
 	}
 	if err := s.revoke(ctx, actor, g); err != nil {

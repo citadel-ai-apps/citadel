@@ -1,11 +1,38 @@
 {{define "tenants.html"}}
 {{template "head" .}}
+{{if .Data.Breakglass}}
+<section class="card">
+  <h2>Your break-glass sessions</h2>
+  <p class="hint">Projects you hold no role on: their pages read-only, plus the PocketBase admin for a data session on
+    <code>pb_data</code>. Each project has been told, with your reason. Sessions end on their own; end one sooner when you
+    are done.</p>
+  <table>
+    <thead><tr><th>project</th><th>grant</th><th>scope</th><th>ends</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.Breakglass}}
+      <tr class="bad">
+        <td><a href="/t/{{.Tenant.ID}}">{{.Tenant.Slug}}</a></td>
+        <td><code>{{.Grant.ID}}</code></td>
+        <td>{{label .Grant.Kind}} · {{.Grant.Subject}}</td>
+        <td>{{stamp .Grant.ExpiresAt}}</td>
+        <td>
+          <form method="post" action="/breakglass/{{.Grant.ID}}/close" class="inline">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit">End session</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
 <h1>Projects</h1>
-{{if .Data}}
+{{if .Data.Projects}}
 <table>
   <thead><tr><th>project</th><th>pocketbase</th><th>state</th><th>your role</th><th>hostname</th></tr></thead>
   <tbody>
-  {{range .Data}}
+  {{range .Data.Projects}}
     <tr>
       <td><a href="/t/{{.Tenant.ID}}">{{.Tenant.Slug}}</a></td>
       <td>{{.Tenant.RuntimeVersion}}</td>
@@ -16,6 +43,9 @@
   {{end}}
   </tbody>
 </table>
+{{else if .Actor.CanBreakglass}}
+<p class="empty">You hold no role on any project. As an operator, open break-glass on one from
+<a href="/attestations">access</a>.</p>
 {{else}}
 <p class="empty">No projects yet. An operator provisions one with
 <code>citadel tenant create --slug &lt;name&gt; --pb-version &lt;version&gt; --owner {{.Actor.ID}}</code>.</p>

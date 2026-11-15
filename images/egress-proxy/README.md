@@ -3,12 +3,12 @@
 The forward proxy that is the only way out of the sandbox (design §9.4).
 
 ```
-make egress-image      # builds, pushes 127.0.0.1:5000/egress-proxy:6-r2, records its digest
+make egress-image      # builds, pushes 127.0.0.1:5000/egress-proxy:6-r3, records its digest
 ```
 
 The control plane schedules it by digest. Unless `egress_proxy_image` is set, it uses
 the newest entry for the host's architecture in `digests.txt` (`<squid> r<rev> <arch>
-<digest>`). The build also tags `v2p-squid:6-r2` locally for the netprobe scripts that
+<digest>`). The build also tags `v2p-squid:6-r3` locally for the netprobe scripts that
 run Squid by hand.
 
 **What is pinned.** The Alpine base is pinned by its multi-arch index digest. The
@@ -18,8 +18,9 @@ what gets scheduled, so a rebuild that picks up newer packages shows up as a new
 in `digests.txt`. A running proxy never changes silently. Bumping the base digest
 is a `PROXY_REV` bump.
 
-**Builds are reproducible.** Rebuilding unchanged inputs gives the same digest, and
-`make egress-image` adds no line. Every mtime is pinned, `/etc/shadow`'s day stamp is
+**Builds are reproducible.** Rebuilding unchanged inputs gives the same digest, on any
+host of the same arch, and `make egress-image` adds no line: the image is built by the
+pinned BuildKit (`make builder`), not the host's Docker. Every mtime is pinned, `/etc/shadow`'s day stamp is
 cleared, and nothing random is generated at build time. A new line for the same
 `<squid> r<rev> <arch>` means Alpine shipped newer packages or the Containerfile changed.
 

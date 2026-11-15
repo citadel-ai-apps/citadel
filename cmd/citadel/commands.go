@@ -264,7 +264,7 @@ func (c *client) principalCmd(ctx context.Context, args []string) error {
 
 	if len(args) == 0 {
 
-		return errors.New("principal needs a subcommand: create|list|suspend|set-password")
+		return errors.New("principal needs a subcommand: create|list|suspend|set-password|operator")
 	}
 	switch args[0] {
 
@@ -312,6 +312,51 @@ func (c *client) principalCmd(ctx context.Context, args []string) error {
 
 	case "set-password":
 		return c.setPassword(ctx, args[1:])
+	case "operator":
+		// Persons only: the shared platform login names nobody (INV-16).
+		var id string
+		on, set := false, false
+		for _, a := range args[1:] {
+
+			switch a {
+
+			case "--on":
+				on, set = true, true
+			case "--off":
+				on, set = false, true
+			default:
+				if id != "" {
+
+					return fmt.Errorf("unexpected argument %q", a)
+				}
+				id = a
+			}
+		}
+		if id == "" || !set {
+
+			return errors.New("principal operator needs <id> and --on or --off")
+		}
+		raw, err := c.call(ctx, http.MethodPost, "/api/v1/admin/principals/"+id+"/operator",
+			map[string]bool{"operator": on})
+		if err != nil {
+
+			return err
+		}
+		return c.emit(raw, func([]byte) error {
+
+			if on {
+
+				fmt.Printf("%s: operator\n", id)
+				fmt.Println("  may open, close and review break-glass, in the portal or with `citadel breakglass`")
+				fmt.Println("  set a portal password with `citadel principal set-password` if they have none")
+
+			} else {
+
+				fmt.Printf("%s: no longer an operator\n", id)
+				fmt.Println("  any break-glass access they hold ends on their next portal request")
+			}
+			return nil
+		})
 	case "list":
 		return c.printGet(ctx, "/api/v1/admin/principals", renderPrincipals)
 	case "create":

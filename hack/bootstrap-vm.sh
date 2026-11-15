@@ -82,9 +82,10 @@ make -C "$REPO_ROOT" registry
 # use rather than migrated into later.
 #
 # Rebuilding reproduces the same digests: `make image` pins the PocketBase zip
-# by a committed checksum, the Alpine base by digest, and every timestamp
-# (SOURCE_DATE_EPOCH=0, file mtimes in the Containerfile), and passes
-# --provenance=false, so identical inputs give identical digests (design §5).
+# by a committed checksum, the Alpine base by digest, every timestamp
+# (SOURCE_DATE_EPOCH=0, file mtimes in the Containerfile) and the builder itself
+# (one pinned BuildKit, `make builder`), so identical inputs give identical
+# digests on any host of the same arch (design §5).
 # The Makefile owns the defaults; reading them here keeps a provisioned VM in
 # step with `make images-all`.
 mkvar() { make -s --no-print-directory -C "$REPO_ROOT" "print-$1"; }

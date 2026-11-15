@@ -32,8 +32,11 @@
 <section class="card">
   <h2>Projects</h2>
   <p class="hint">A re-check needs no role on the project and opens none of its pages.
-    Break-glass is opened by a named person (INV-16), on the host:
-    <code>citadel breakglass open &lt;slug&gt; --reason …</code>.</p>
+    Break-glass is opened by a named operator (INV-16), here or with <code>citadel breakglass open</code>.
+    It is self-approved: access starts the moment you open it, for 60 minutes, and nobody approves it first.
+    The project is told at once with your reason; afterwards, within 24h, another operator reviews whether it was justified.
+    A session left unreviewed for more than 24h after it was opened blocks its opener from opening another until it is
+    reviewed; until then nothing blocks, and an operator can open further sessions with earlier ones unreviewed.</p>
   {{if .Data.Projects}}
   <table>
     <thead><tr><th>project</th><th>last attestation</th><th>break-glass</th><th></th></tr></thead>
@@ -48,6 +51,27 @@
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
             <button type="submit">Re-check from the host</button>
           </form>
+          {{if $.Actor.CanBreakglass}}
+          <details>
+            <summary>Open break-glass</summary>
+            <form method="post" action="/attestations/{{.Tenant.ID}}/breakglass"
+                  data-confirm="Open break-glass on {{.Tenant.Slug}} now? Access starts immediately, with no approval step. The project is told now, with your reason, and another operator reviews it afterwards.">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <label>Reason, shown to the project verbatim
+                <textarea name="reason" required></textarea></label>
+              <label>Access
+                <select name="kind">
+                  <option value="operator_data_access">data: pages, plus PocketBase admin (superuser, read-write) on pb_data</option>
+                  <option value="support_impersonation">support: pages only, read-only</option>
+                </select></label>
+              <label>Scope <input name="scope" value="pb_data"></label>
+              <p class="hint">Recorded and shown to the project. Only <code>pb_data</code> with data access adds the
+                PocketBase admin; anything else, such as the id of a snapshot you will read on the host, gives the pages only.</p>
+              <label>Your password <input type="password" name="password" autocomplete="current-password" required></label>
+              <button type="submit">Open for 60 minutes</button>
+            </form>
+          </details>
+          {{end}}
         </td>
       </tr>
     {{end}}
@@ -64,8 +88,17 @@
   <h3>Open right now</h3>
   <ul>
     {{range .Data.BreakGlassOpen}}
-    <li>{{.TenantID}} · {{.Subject}} · opened by {{.RequestedBy}} ·
-        expires {{stamp .ExpiresAt}}<br><span class="hint">{{.Justification}}</span></li>
+    <li><code>{{.ID}}</code> · {{.TenantID}} · {{.Subject}} · opened by {{.RequestedBy}} ·
+        expires {{stamp .ExpiresAt}}<br><span class="hint">{{.Justification}}</span>
+      {{if $.Actor.CanBreakglass}}
+      <form method="post" action="/breakglass/{{.ID}}/close" class="inline"
+            data-confirm="End {{.RequestedBy}}'s break-glass session on {{.TenantID}} now?">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input name="reason" placeholder="why, for the project">
+        <button type="submit">End session</button>
+      </form>
+      {{end}}
+    </li>
     {{end}}
   </ul>
   {{else}}
@@ -73,19 +106,40 @@
   {{end}}
 
   {{if .Data.BreakGlassLate}}
-  <h3>Past the 24h review</h3>
-  <p class="hint">The opener cannot open another until someone else reviews these, on the host:
-    <code>citadel breakglass review &lt;id&gt; --outcome justified|unjustified --notes …</code>.</p>
+  <p class="flash err">{{len .Data.BreakGlassLate}} opened more than 24h ago and still unreviewed: each blocks its own opener
+    from opening another session until someone else reviews it. Sessions younger than 24h block nothing.</p>
+  {{end}}
+  {{if .Data.Unreviewed}}
+  <h3>Not yet reviewed</h3>
+  <p class="hint">A review is a verdict after the fact, not an approval: access began when each session was opened, and
+    a review neither grants nor withdraws it (end a session with <em>End session</em>). An operator other than the opener
+    records whether it was justified, here or with
+    <code>citadel breakglass review &lt;id&gt; --outcome justified|unjustified --notes …</code>. The project sees the verdict.</p>
   <table>
-    <thead><tr><th>grant</th><th>project</th><th>opened by</th><th>when</th><th>reason</th></tr></thead>
+    <thead><tr><th>grant</th><th>project</th><th>opened by</th><th>when</th><th>reason</th><th></th></tr></thead>
     <tbody>
-    {{range .Data.BreakGlassLate}}
-      <tr>
-        <td><code>{{.ID}}</code></td>
-        <td>{{.TenantID}}</td>
-        <td>{{.RequestedBy}}</td>
-        <td>{{ago .RequestedAt}}</td>
-        <td>{{.Justification}}</td>
+    {{range .Data.Unreviewed}}
+      <tr{{if .Overdue}} class="bad"{{end}}>
+        <td><code>{{.Grant.ID}}</code></td>
+        <td>{{.Grant.TenantID}}</td>
+        <td>{{.Grant.RequestedBy}}</td>
+        <td>{{ago .Grant.RequestedAt}}{{if .Open}} · access open now{{else}} · ended{{end}}{{if .Overdue}} · review overdue{{end}}</td>
+        <td>{{.Grant.Justification}}</td>
+        <td>
+          {{if and $.Actor.CanBreakglass (ne .Grant.RequestedBy $.Actor.ID)}}
+          <form method="post" action="/breakglass/{{.Grant.ID}}/review" class="inline">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <select name="outcome">
+              <option value="justified">justified</option>
+              <option value="unjustified">unjustified</option>
+            </select>
+            <input name="notes" placeholder="notes, shown to the project" required>
+            <button type="submit">Record verdict</button>
+          </form>
+          {{else if eq .Grant.RequestedBy $.Actor.ID}}
+          <span class="hint">yours: another operator records the verdict</span>
+          {{end}}
+        </td>
       </tr>
     {{end}}
     </tbody>

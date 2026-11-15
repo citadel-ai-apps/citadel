@@ -16,10 +16,12 @@ import (
 
 	"github.com/citadel-ai-apps/citadel/internal/auditlog"
 	"github.com/citadel-ai-apps/citadel/internal/authn"
+	"github.com/citadel-ai-apps/citadel/internal/breakglass"
 	"github.com/citadel-ai-apps/citadel/internal/config"
 	"github.com/citadel-ai-apps/citadel/internal/driver"
 	"github.com/citadel-ai-apps/citadel/internal/grantpolicy"
 	"github.com/citadel-ai-apps/citadel/internal/identity"
+	"github.com/citadel-ai-apps/citadel/internal/pbauth"
 	"github.com/citadel-ai-apps/citadel/internal/reconcile"
 	"github.com/citadel-ai-apps/citadel/internal/release"
 	"github.com/citadel-ai-apps/citadel/internal/store"
@@ -204,13 +206,19 @@ func (s *Server) verify(ctx context.Context, id, password string) (identity.Acto
 // naming the platform as the observer.
 func (s *Server) recordLogin(ctx context.Context, id string, ok bool, remote string) {
 
+	s.recordAuth(ctx, id, ok, remote, "portal")
+}
+
+// recordAuth is recordLogin for any password check; surface says which.
+func (s *Server) recordAuth(ctx context.Context, id string, ok bool, remote, surface string) {
+
 	action := auditlog.ActionLoginFailed
 	if ok {
 
 		action = auditlog.ActionLoginSucceeded
 	}
 	actor := identity.Platform()
-	detail := map[string]any{"claimed": id, "surface": "portal"}
+	detail := map[string]any{"claimed": id, "surface": surface}
 	if p, err := s.ident.Get(ctx, id); err == nil {
 
 		actor = identity.Actor{ID: p.ID, Kind: p.Kind}
@@ -310,7 +318,24 @@ func (s *Server) tenantsPage(w http.ResponseWriter, req *http.Request) {
 		}
 		rows = append(rows, tenantRow{Tenant: t, Role: tr.Role, State: state})
 	}
-	s.render(w, req, "tenants.html", "Projects", rows)
+	var held []heldRow
+	if sess.actor.CanBreakglass() {
+
+		grants, _ := store.ActiveBreakglassHeld(ctx, s.db.Reader(), sess.actor.ID, time.Now().UTC())
+		for _, g := range grants {
+
+			if t, err := store.GetTenant(ctx, s.db.Reader(), g.TenantID); err == nil {
+
+				held = append(held, heldRow{Tenant: t, Grant: g})
+			}
+		}
+	}
+	s.render(w, req, "tenants.html", "Projects", map[string]any{"Projects": rows, "Breakglass": held})
+}
+
+type heldRow struct {
+	Tenant store.Tenant
+	Grant  store.Grant
 }
 
 // tenantView is everything the detail page shows. Assembled in the handler
@@ -350,6 +375,9 @@ type tenantView struct {
 	Access accessView
 	// Tab is which section of the page is shown; one of tenantTabs.
 	Tab string
+	// Breakglass is the session this page is open under, nil for a stored
+	// role. The page says so above everything else (§14.3).
+	Breakglass *store.Grant
 }
 
 // tenantTabs are the sections of the tenant page, in tab-bar order. The first
@@ -387,19 +415,31 @@ func (s *Server) tenantPage(w http.ResponseWriter, req *http.Request) {
 
 	ctx := req.Context()
 	sess := current(ctx)
-	t, role, err := s.tenantFor(ctx, sess.actor, mux.Vars(req)["id"])
+	a, err := s.resolveTenant(ctx, sess.actor, mux.Vars(req)["id"])
 	if err != nil {
 
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	if err := s.auditBreakglassView(ctx, sess.actor, a); err != nil {
+
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	t, role := a.Tenant, a.Role
 
 	v := tenantView{
-		Tenant:    t,
-		Role:      role,
-		CanDeploy: identity.RoleAllows(role, identity.CapDeploy),
-		CanManage: identity.RoleAllows(role, identity.CapTransfer),
-		CanAdmin:  identity.RoleAllows(role, identity.CapInstanceAdmin) && sess.actor.Kind != identity.KindPlatform,
+		Tenant:     t,
+		Role:       role,
+		CanDeploy:  identity.RoleAllows(role, identity.CapDeploy),
+		CanManage:  identity.RoleAllows(role, identity.CapTransfer),
+		CanAdmin:   identity.RoleAllows(role, identity.CapInstanceAdmin) && sess.actor.Kind != identity.KindPlatform,
+		Breakglass: a.Breakglass,
+	}
+	if a.Breakglass != nil && pbauth.IsLegacy(t.RuntimeVersion) {
+
+		// A pre-0.23 admin token cannot be made to stop with the session.
+		v.CanAdmin = false
 	}
 	v.Tab = req.URL.Query().Get("tab")
 	if !validTab(v.Tab) {
@@ -644,11 +684,16 @@ const (
 
 // isOperator gates the portal's operator pages: the fleet view, the grant
 // queue, attestations and the on-demand re-check. None of them decides
-// anything a person is accountable for. Tier-2 decisions, break-glass and its
-// review need a named person (INV-16, §14.1), and the portal's operator is the
-// shared platform principal, so those are citadel over the unix socket, where
-// the actor is the human at the terminal.
-func (s *Server) isOperator(a identity.Actor) bool { return a.Kind == identity.KindPlatform }
+// anything a person is accountable for, so the shared platform login sees them
+// as well as a named operator (a person with the operator flag).
+//
+// Break-glass and its review need a named person (INV-16), so they check
+// Actor.CanBreakglass instead, which the platform principal never passes.
+// Tier-2 decisions are still citadel over the unix socket.
+func (s *Server) isOperator(a identity.Actor) bool {
+
+	return a.Kind == identity.KindPlatform || a.CanBreakglass()
+}
 
 // ---- actions ---------------------------------------------------------------
 
@@ -848,6 +893,11 @@ func (s *Server) revokeGrant(w http.ResponseWriter, req *http.Request) {
 		back(w, req, "/t/"+t.ID, "", fmt.Errorf("%w: %s", store.ErrGrantNotFound, gid))
 		return
 	}
+	if g.Tier == grantpolicy.TierBreakGlass {
+
+		back(w, req, "/t/"+t.ID+"?tab=access", "", breakglass.ErrTenantRevoke)
+		return
+	}
 	err = s.db.Tx(ctx, func(tx bun.Tx) error {
 
 		if err := store.RevokeGrant(ctx, tx, gid, sess.actor.ID); err != nil {
@@ -976,6 +1026,11 @@ func (s *Server) ownerAction(w http.ResponseWriter, req *http.Request) {
 	sess := current(ctx)
 	id := mux.Vars(req)["id"]
 	t, role, err := s.tenantFor(ctx, sess.actor, id)
+	if err == nil && identity.IsBreakglassRole(role) {
+
+		// Break-glass never takes part in who owns the tenant.
+		err = fmt.Errorf("%w: break-glass access is read-only", identity.ErrForbidden)
+	}
 	if err != nil {
 
 		http.Error(w, err.Error(), http.StatusForbidden)
@@ -1040,11 +1095,24 @@ func (s *Server) tenantLogs(w http.ResponseWriter, req *http.Request) {
 
 	ctx := req.Context()
 	sess := current(ctx)
-	t, _, err := s.tenantFor(ctx, sess.actor, mux.Vars(req)["id"])
+	a, err := s.resolveTenant(ctx, sess.actor, mux.Vars(req)["id"])
 	if err != nil {
 
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
+	}
+	t := a.Tenant
+	if a.Breakglass != nil {
+
+		// Container output is the tenant's: under break-glass, reading it is a
+		// platform read of their data and lands on their Access tab. Once per
+		// session; the tail polls.
+		if err := s.auditBreakglassOnce(ctx, sess.actor, *a.Breakglass, auditlog.ActionLogRead,
+			map[string]any{"what": "container_logs"}); err != nil {
+
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
@@ -1085,35 +1153,79 @@ func (s *Server) lookupTenant(ctx context.Context, id string) (store.Tenant, err
 	return t, nil
 }
 
-// tenantFor resolves a tenant the principal may see, by id or slug.
+// tenantAccess is how a principal reaches a tenant: a stored role, or an active
+// break-glass session.
+type tenantAccess struct {
+	Tenant store.Tenant
+	Role   string
+	// Breakglass is the session the access comes from, nil for a stored role.
+	Breakglass *store.Grant
+}
+
+// resolveTenant resolves a tenant the principal may see, by id or slug.
+//
+// A stored role wins. With none, a named operator holding an active break-glass
+// grant on the tenant gets a synthetic break-glass role (§14.3): the pages
+// read-only, plus the admin handoff when breakglass.OpensAdmin. It is re-checked
+// on every request, so expiry, an early close and a cleared operator flag all
+// end it on the next click.
 //
 // The platform principal is not special-cased: it sees a tenant only while it
 // holds a real role row on it, as it does after taking custody of an orphan
-// (§14.1). Anything else would be standing access to every tenant's page,
-// logs and releases, which §14 routes through break-glass instead.
-func (s *Server) tenantFor(ctx context.Context, actor identity.Actor, id string) (store.Tenant, string, error) {
+// (§14.1), and it can never hold break-glass. Anything else would be standing
+// access to every tenant's page, logs and releases.
+func (s *Server) resolveTenant(ctx context.Context, actor identity.Actor, id string) (tenantAccess, error) {
 
 	t, err := s.lookupTenant(ctx, id)
 	if err != nil {
 
-		return store.Tenant{}, "", err
+		return tenantAccess{}, err
 	}
 	role, err := s.ident.Role(ctx, t.ID, actor.ID)
+	if err == nil {
+
+		return tenantAccess{Tenant: t, Role: role}, nil
+	}
+	if actor.CanBreakglass() {
+
+		g, ok, err := store.ActiveBreakglassFor(ctx, s.db.Reader(), t.ID, actor.ID, time.Now().UTC())
+		if err != nil {
+
+			return tenantAccess{}, err
+		}
+		if ok {
+
+			role := identity.RoleBreakglassView
+			if breakglass.OpensAdmin(g) {
+
+				role = identity.RoleBreakglassData
+			}
+			return tenantAccess{Tenant: t, Role: role, Breakglass: &g}, nil
+		}
+	}
+	// Same answer as "no such tenant": a principal with no role must not be
+	// able to probe which slugs exist.
+	return tenantAccess{}, fmt.Errorf("%w: %s", store.ErrTenantNotFound, id)
+}
+
+// tenantFor is resolveTenant for callers that only need the tenant and role.
+func (s *Server) tenantFor(ctx context.Context, actor identity.Actor, id string) (store.Tenant, string, error) {
+
+	a, err := s.resolveTenant(ctx, actor, id)
 	if err != nil {
 
-		// Same answer as "no such tenant": a principal with no role must not be
-		// able to probe which slugs exist.
-		return store.Tenant{}, "", fmt.Errorf("%w: %s", store.ErrTenantNotFound, id)
+		return store.Tenant{}, "", err
 	}
-	return t, role, nil
+	return a.Tenant, a.Role, nil
 }
 
 // operatorTenant resolves a tenant for an operator action on the Access page
 // (on-demand attestation, opening break-glass), with no role check.
 //
-// Only for actions that show none of the tenant's data: the operator needs no
-// role on a tenant to make the host re-check it or to open break-glass, and
-// gets no tenant page out of either.
+// Only for actions that show none of the tenant's data by themselves: the
+// operator needs no role on a tenant to make the host re-check it or to open
+// break-glass. The tenant page that break-glass then opens is resolveTenant's,
+// checked per request against the session.
 func (s *Server) operatorTenant(ctx context.Context, actor identity.Actor, id string) (store.Tenant, error) {
 
 	if !s.isOperator(actor) {

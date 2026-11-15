@@ -119,12 +119,18 @@ func (s *Server) upgradePage(w http.ResponseWriter, req *http.Request) {
 
 	ctx := req.Context()
 	sess := current(ctx)
-	t, role, err := s.tenantFor(ctx, sess.actor, mux.Vars(req)["id"])
+	a, err := s.resolveTenant(ctx, sess.actor, mux.Vars(req)["id"])
 	if err != nil {
 
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	if err := s.auditBreakglassView(ctx, sess.actor, a); err != nil {
+
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	t, role := a.Tenant, a.Role
 	job, err := store.GetUpgradeJob(ctx, s.db.Reader(), mux.Vars(req)["jobid"])
 	if err != nil || job.TenantID != t.ID {
 

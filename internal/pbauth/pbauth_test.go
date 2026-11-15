@@ -154,6 +154,36 @@ func TestMintModernSeat(t *testing.T) {
 	}
 }
 
+// Break-glass hands an operator the admin UI for a fixed time. A refreshable
+// token would be renewed by the UI for as long as the tab stays open.
+func TestMintStaticIsNotRefreshable(t *testing.T) {
+
+	dir := t.TempDir()
+	modernDB(t, dir)
+	tok, err := MintStatic(context.Background(), Source{DataDir: dir, PBVersion: "0.40.4"},
+		BySeatEmail(SeatEmail("t1")), 10*time.Minute)
+	if err != nil {
+
+		t.Fatal(err)
+	}
+	c := verify(t, tok.Token, "seatkey"+"collsecret")
+	if c["refreshable"] != false || c["id"] != "seat1" {
+
+		t.Fatalf("claims = %v", c)
+	}
+	exp := int64(c["exp"].(float64))
+	if d := time.Until(time.Unix(exp, 0)); d <= 9*time.Minute || d > 10*time.Minute {
+
+		t.Fatalf("exp is %v away, want about ten minutes", d)
+	}
+
+	if _, err := MintStatic(context.Background(), Source{DataDir: dir, PBVersion: "0.22.55"},
+		BySeatEmail(SeatEmail("t1")), time.Minute); !errors.Is(err, ErrNotTimeBoxable) {
+
+		t.Fatalf("legacy err = %v, want ErrNotTimeBoxable", err)
+	}
+}
+
 func TestMintAnySuperuserIsNotTiedToTheSeat(t *testing.T) {
 
 	dir := t.TempDir()

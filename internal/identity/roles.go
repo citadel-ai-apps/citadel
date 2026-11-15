@@ -35,6 +35,26 @@ var roleRank = map[string]int{
 	RoleViewer: 1, RoleDeployer: 2, RoleAdmin: 3, RoleOwner: 4,
 }
 
+// Break-glass roles. Never stored: GrantRole refuses them, and Role and Require
+// read only tenant_owner rows, so they cannot pass a check that goes to the
+// database. The portal synthesises one for an operator holding an active
+// break-glass grant on a tenant they have no role on (§14.3), and only its own
+// role-from-session checks ever see it.
+const (
+	// RoleBreakglassData is operator_data_access on pb_data: the tenant's pages,
+	// read-only, plus the PocketBase admin handoff, a read-write superuser
+	// session whose token never outlives the session's 60-minute box.
+	RoleBreakglassData = "break_glass"
+	// RoleBreakglassView is support_impersonation, or operator_data_access on
+	// any scope other than pb_data: the tenant's pages, read-only.
+	RoleBreakglassView = "break_glass_view"
+)
+
+func IsBreakglassRole(role string) bool {
+
+	return role == RoleBreakglassData || role == RoleBreakglassView
+}
+
 // capabilities is design §14.1's table, transcribed. A deployer may request
 // grants of any tier, as a deploy's manifest already does; a Tier-2 request
 // only becomes pending and still needs a named approver (§14.3). Re-affirming
@@ -44,6 +64,10 @@ var capabilities = map[string]map[string]bool{
 	RoleAdmin:    {CapDeploy: true, CapRequestGrant: true, CapDownloadBackup: true, CapInstanceAdmin: true},
 	RoleDeployer: {CapDeploy: true, CapRequestGrant: true},
 	RoleViewer:   {},
+	// Not in roleRank: a break-glass role is never compared against a stored
+	// one, because a real role always wins.
+	RoleBreakglassData: {CapInstanceAdmin: true},
+	RoleBreakglassView: {},
 }
 
 // RoleAllows reports whether a role carries a capability.

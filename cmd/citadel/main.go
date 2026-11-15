@@ -80,13 +80,15 @@ const usage = `citadel — control-plane CLI
   citadel attest show [<slug>]
   citadel attest generate <slug>
   citadel breakglass list
-  citadel breakglass open <slug> --reason <text> [--scope <what>]
+  citadel breakglass open <slug> --reason <text> [--scope <what>] [--kind operator_data_access|support_impersonation]
   citadel breakglass review <gid> --outcome justified|unjustified --notes <text>
+  citadel breakglass close <gid> [--reason <text>]
 
   citadel token create --principal <id> --name <label> [--days N]
   citadel token list [--principal <id>]
   citadel token revoke <id>
   citadel principal set-password <id> --password <secret>
+  citadel principal operator <id> --on|--off
 
   citadel principal create <id> [--name <display>] [--email <addr>]
   citadel principal list

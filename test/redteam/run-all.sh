@@ -245,9 +245,13 @@ trap cleanup EXIT
 log "0. platform"
 start_daemon
 citadel principal create "$OWNER" --name "Red team" >/dev/null 2>&1
-# A second operator, so the break-glass probe can assert that a session is
-# reviewed by SOMEBODY ELSE. A self-review is not a review.
+# Two named operators, so the break-glass probe can assert that a session is
+# reviewed by SOMEBODY ELSE. A self-review is not a review, and a tenant
+# member's is not an operator's.
 citadel principal create person:oncall --name "On call" >/dev/null 2>&1
+citadel principal create person:reviewer --name "Reviewer" >/dev/null 2>&1
+citadel principal operator person:oncall --on >/dev/null 2>&1
+citadel principal operator person:reviewer --on >/dev/null 2>&1
 check "the egress network exists" docker network inspect "$EGRESS_NET"
 check "the egress proxy is running" \
     bash -c "[ \"\$(docker inspect -f '{{.State.Running}}' citadel-squid)\" = true ]"
@@ -1159,10 +1163,15 @@ fi
 
 # ── 13. breakglass-silent ───────────────────────────────────────────
 log "13. breakglass-silent — an operator cannot read a tenant's data quietly"
-# The claim is not that break-glass is prevented. A root operator can read the
-# bind mount regardless (D15), so the honest posture is detection: the reason is
-# mandatory, the box is hard, and the tenant is told at GRANT time rather than
-# at review time.
+# The claim is not that root is prevented. A root operator can read the bind
+# mount regardless (D15), so that path is detection. Break-glass is the door
+# that needs no root: it opens the tenant in the portal for the named operator
+# who opened it, the reason is mandatory, the box is hard, and the tenant is
+# told at GRANT time rather than at review time.
+contained "only a named operator opens break-glass: the tenant owner cannot" \
+    bash -c "'$CITADEL' --socket '$SOCK' --as '$OWNER' breakglass open '$SLUG' --reason 'not an operator'"
+contained "the shared platform principal cannot hold break-glass" \
+    bash -c "'$CITADEL' --socket '$SOCK' --as platform breakglass open '$SLUG' --reason 'names nobody'"
 BG_JSON="$($CITADEL --socket "$SOCK" --as person:oncall --json \
     breakglass open "$SLUG" --reason "redteam: probing the access path" 2>&1)"
 BG_ID="$(printf '%s' "$BG_JSON" | sed -n 's/.*"id"[ :]*"\(g-[^"]*\)".*/\1/p' | head -1)"
@@ -1208,14 +1217,31 @@ sys.exit(0 if 59 <= mins <= 61 else 1)\""
     contained "the operator cannot review their own session" \
         bash -c "'$CITADEL' --socket '$SOCK' --as person:oncall breakglass review '$BG_ID' \
           --outcome justified --notes 'self-review'"
-    # An unreviewed session blocks the same principal, and only somebody else
+    contained "the tenant owner cannot review it: the verdict is a second operator's" \
+        bash -c "'$CITADEL' --socket '$SOCK' --as '$OWNER' breakglass review '$BG_ID' \
+          --outcome justified --notes 'owner review'"
+    # Now that the session grants something, ending it is the operator's call.
+    # The tenant's say is the notice at grant time and the verdict at review.
+    contained "the tenant cannot revoke a break-glass session" \
+        bash -c "curl -sf -X DELETE --unix-socket '$SOCK' -H 'X-V2P-Principal: $OWNER' \
+          'http://controlplane/api/v1/tenants/$SLUG/grants/$BG_ID'"
+    check "the opener can end it early" \
+        bash -c "'$CITADEL' --socket '$SOCK' --as person:oncall breakglass close '$BG_ID' --reason 'done'"
+    check "an early close is recorded, and the tenant is told" \
+        bash -c "sqlite3 '$STATE_DB' \
+          \"SELECT COUNT(*) FROM access_grant WHERE id='$BG_ID' AND revoked_at IS NOT NULL\" | grep -q '^1$' &&
+          sqlite3 '$STATE_DB' \
+          \"SELECT COUNT(*) FROM notification WHERE audience='tenant' AND kind='breakglass.closed'
+             AND subject_ref='grant/$BG_ID'\" | grep -q '^1$'"
+    # A session left unreviewed past its 24h window blocks the same principal
+    # (a younger one does not, and the unit tests pin that), and only somebody else
     # can clear it. That is what stops break-glass becoming routine.
     tsql "UPDATE access_grant SET requested_at = datetime('now','-2 days') WHERE id='$BG_ID'"
     contained "an unreviewed session past 24h blocks that operator from opening another" \
         bash -c "'$CITADEL' --socket '$SOCK' --as person:oncall breakglass open '$SLUG' \
           --reason 'second attempt'"
     check "another operator can review it, and that clears the block" \
-        bash -c "'$CITADEL' --socket '$SOCK' --as '$OWNER' breakglass review '$BG_ID' \
+        bash -c "'$CITADEL' --socket '$SOCK' --as person:reviewer breakglass review '$BG_ID' \
           --outcome justified --notes 'redteam probe, expected'"
 fi
 

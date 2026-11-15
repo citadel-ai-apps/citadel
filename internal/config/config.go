@@ -250,7 +250,7 @@ func Default() Config {
 		SeccompProfile:  "images/pb-hardened/seccomp.json",
 		AppArmorProfile: "pb-hardened",
 		DigestsFile:     "images/pb-hardened/digests.txt",
-		HardeningRev:    2,
+		HardeningRev:    3,
 		Arch:            arch,
 		SubnetPool:      "10.213.0.0/16",
 		ReservedSubnets: []string{"10.213.0.0/29"},

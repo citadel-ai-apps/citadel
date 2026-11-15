@@ -12,7 +12,16 @@ import (
 type Actor struct {
 	ID   string
 	Kind string
+	// Operator is the principal's operator flag (migration 009), read fresh on
+	// every resolve so clearing it takes effect on the next request. Only a
+	// person carries it; see CanBreakglass.
+	Operator bool
 }
+
+// CanBreakglass reports whether this actor may open, hold, review or close a
+// break-glass session: a named person with the operator flag. Never the
+// platform principal, whose shared login names nobody (INV-16).
+func (a Actor) CanBreakglass() bool { return a.Kind == KindPerson && a.Operator }
 
 // Platform is the actor for reconciler and recovery work.
 func Platform() Actor { return Actor{ID: PlatformPrincipal, Kind: KindPlatform} }
@@ -49,5 +58,5 @@ func (s *Service) ResolveActor(ctx context.Context, id string) (Actor, error) {
 
 		return Actor{}, fmt.Errorf("%w: principal %s is %s", ErrInactive, p.ID, p.Status)
 	}
-	return Actor{ID: p.ID, Kind: p.Kind}, nil
+	return Actor{ID: p.ID, Kind: p.Kind, Operator: p.Operator && p.Kind == KindPerson}, nil
 }

@@ -261,16 +261,22 @@ func renderPrincipals(b []byte) error {
 		DisplayName string `json:"display_name"`
 		Status      string `json:"status"`
 		Email       string `json:"email"`
+		Operator    bool   `json:"operator"`
 	}
 	if err := json.Unmarshal(b, &ps); err != nil {
 
 		return printJSON(b)
 	}
 	w := tw()
-	fmt.Fprintln(w, "ID\tKIND\tSTATUS\tNAME\tEMAIL")
+	fmt.Fprintln(w, "ID\tKIND\tSTATUS\tOPERATOR\tNAME\tEMAIL")
 	for _, p := range ps {
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", p.ID, p.Kind, p.Status, p.DisplayName, p.Email)
+		op := "-"
+		if p.Operator {
+
+			op = "yes"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Kind, p.Status, op, p.DisplayName, p.Email)
 	}
 	return w.Flush()
 }

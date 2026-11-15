@@ -136,10 +136,10 @@ func TestOnlyAnOperatorAttestsOnDemand(t *testing.T) {
 }
 
 // INV-16: a Tier-2 decision, a break-glass session and its review each need a
-// named person. The portal's operator is the shared platform principal, which
-// names nobody, so none of the three has a portal route; they are citadel
-// commands on the socket, where the actor is the human at the terminal.
-func TestPortalDecidesNoGrantAndOpensNoBreakglass(t *testing.T) {
+// named person. Tier-2 decisions have no portal route at all. Break-glass does,
+// for a person with the operator flag (breakglass_test.go), and refuses the
+// shared platform login and a tenant member alike.
+func TestPortalDecidesNoGrantAndOpensNoBreakglassForTheUnnamed(t *testing.T) {
 
 	f := newAdminFixture(t)
 	ctx := context.Background()
@@ -153,19 +153,25 @@ func TestPortalDecidesNoGrantAndOpensNoBreakglass(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	form := func() url.Values {
+
+		return url.Values{"reason": {"because"}, "outcome": {"justified"}, "notes": {"fine"}, "password": {"x"}}
+	}
 	for _, principal := range []string{identity.PlatformPrincipal, "person:owner"} {
 
-		for _, path := range []string{
-			"/grants/g-t2/approve", "/grants/g-t2/deny",
-			"/attestations/demo/breakglass", "/t/demo/breakglass", "/breakglass/g-t2/review",
-		} {
+		for _, path := range []string{"/grants/g-t2/approve", "/grants/g-t2/deny", "/t/demo/breakglass"} {
 
-			rec := postAs(f, principal, path, url.Values{
-				"reason": {"because"}, "outcome": {"justified"}, "notes": {"fine"},
-			}, true)
-			if rec.Code != http.StatusNotFound {
+			if rec := postAs(f, principal, path, form(), true); rec.Code != http.StatusNotFound {
 
 				t.Errorf("POST %s as %s = %d, want 404", path, principal, rec.Code)
+			}
+		}
+		for _, path := range []string{"/attestations/demo/breakglass", "/breakglass/g-t2/review", "/breakglass/g-t2/close"} {
+
+			rec := postAs(f, principal, path, form(), true)
+			if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "err=") {
+
+				t.Errorf("POST %s as %s = %d %q, want refused", path, principal, rec.Code, rec.Header().Get("Location"))
 			}
 		}
 	}
@@ -174,20 +180,18 @@ func TestPortalDecidesNoGrantAndOpensNoBreakglass(t *testing.T) {
 
 		t.Fatal(err)
 	}
-	if g.Decision != store.DecisionPending {
+	if g.Decision != store.DecisionPending || g.RevokedAt != nil {
 
-		t.Errorf("Tier-2 grant decided through the portal: %s by %s", g.Decision, g.DecidedBy)
+		t.Errorf("Tier-2 grant changed through the portal: %s by %s, revoked %v", g.Decision, g.DecidedBy, g.RevokedAt)
 	}
-	bg, err := store.ListGrants(ctx, f.db.Reader(), store.GrantFilter{
-		TenantID: "demo", Kind: store.GrantOperatorDataAccess,
-	})
+	bg, err := store.BreakglassGrants(ctx, f.db.Reader(), "demo")
 	if err != nil {
 
 		t.Fatal(err)
 	}
 	if len(bg) != 0 {
 
-		t.Errorf("break-glass opened through the portal: %+v", bg)
+		t.Errorf("break-glass opened through the portal by an unnamed principal: %+v", bg)
 	}
 }
 

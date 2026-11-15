@@ -33,7 +33,8 @@ var ErrReviewNotFound = errors.New("store: no break-glass review")
 // BreakglassReview is a second party's verdict on a break-glass session.
 //
 // A separate table rather than columns on access_grant because the ABSENCE of a
-// row is what blocks further break-glass by the same principal. "No row yet" is
+// row, once the session is past its ReviewWindow, is what blocks further
+// break-glass by the same principal. "No row yet" is
 // harder to get wrong than a nullable column somebody forgets to set.
 type BreakglassReview struct {
 	bun.BaseModel `bun:"table:breakglass_review,alias:breakglass_review" json:"-"`
@@ -87,13 +88,82 @@ func BreakglassGrants(ctx context.Context, db bun.IDB, tenantID string) ([]Grant
 	return out, err
 }
 
-// UnreviewedBreakglass returns Tier-3 grants requested by this principal that
-// have no review row and whose review window has passed.
+// ActiveBreakglassFor returns the newest break-glass grant this principal holds
+// on this tenant that is in force right now: approved, not ended early, inside
+// its 60-minute box.
 //
-// This is the block in §14.3: an operator who has not had a past session
-// reviewed cannot open another. The requester cannot clear it themselves,
-// because the review must come from someone else.
-func UnreviewedBreakglass(ctx context.Context, db bun.IDB, principalID string, now time.Time) ([]Grant, error) {
+// This is the one read that makes break-glass grant anything (§14.3): the
+// portal asks it on every request for a tenant the principal has no role on,
+// so expiry and an early close take effect on the next click, with nothing to
+// sweep.
+func ActiveBreakglassFor(ctx context.Context, db bun.IDB, tenantID, principalID string, now time.Time) (Grant, bool, error) {
+
+	var out []Grant
+	err := db.NewSelect().Model(&out).
+		Where("tenant_id = ?", tenantID).
+		Where("requested_by = ?", principalID).
+		Where("kind IN (?, ?)", GrantOperatorDataAccess, GrantSupportImpersonate).
+		Where("revoked_at IS NULL").
+		Order("requested_at DESC").
+		Scan(ctx)
+	if err != nil {
+
+		return Grant{}, false, err
+	}
+	for _, g := range out {
+
+		// Expiry is decided here, not in SQL: Active is the definition, and the
+		// query only narrows what it is asked about.
+		if g.Active(now) {
+
+			return g, true, nil
+		}
+	}
+	return Grant{}, false, nil
+}
+
+// ActiveBreakglassHeld returns every break-glass grant this principal holds
+// that is in force right now, across tenants: the portal's "your break-glass
+// sessions" list.
+func ActiveBreakglassHeld(ctx context.Context, db bun.IDB, principalID string, now time.Time) ([]Grant, error) {
+
+	var rows []Grant
+	err := db.NewSelect().Model(&rows).
+		Where("requested_by = ?", principalID).
+		Where("kind IN (?, ?)", GrantOperatorDataAccess, GrantSupportImpersonate).
+		Where("revoked_at IS NULL").
+		Order("requested_at DESC").
+		Scan(ctx)
+	if err != nil {
+
+		return nil, err
+	}
+	out := rows[:0]
+	for _, g := range rows {
+
+		if g.Active(now) {
+
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+// ReviewOverdue reports whether a session has passed its ReviewWindow. It says
+// nothing about whether it was reviewed.
+func ReviewOverdue(g Grant, now time.Time) bool {
+
+	return !g.RequestedAt.After(now.UTC().Add(-ReviewWindow))
+}
+
+// OverdueBreakglassFor returns this principal's sessions that are past their
+// ReviewWindow with no review.
+//
+// This is the block in §14.3: any row here stops the principal opening another
+// session. A younger unreviewed session is not returned and blocks nothing. The
+// requester cannot clear the block themselves; the review must come from
+// someone else.
+func OverdueBreakglassFor(ctx context.Context, db bun.IDB, principalID string, now time.Time) ([]Grant, error) {
 
 	var out []Grant
 	err := db.NewSelect().Model(&out).
@@ -124,6 +194,19 @@ func OpenBreakglass(ctx context.Context, db bun.IDB, now time.Time) ([]Grant, er
 		}
 	}
 	return out, nil
+}
+
+// UnreviewedBreakglass returns every Tier-3 grant with no review yet,
+// fleet-wide, oldest first, whether or not it is past its window.
+func UnreviewedBreakglass(ctx context.Context, db bun.IDB) ([]Grant, error) {
+
+	var out []Grant
+	err := db.NewSelect().Model(&out).
+		Where("kind IN (?, ?)", GrantOperatorDataAccess, GrantSupportImpersonate).
+		Where("id NOT IN (SELECT grant_id FROM breakglass_review)").
+		Order("requested_at").
+		Scan(ctx)
+	return out, err
 }
 
 // OverdueBreakglass returns every Tier-3 grant past its review window with no

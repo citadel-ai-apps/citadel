@@ -95,7 +95,7 @@ func seedBreakglass(t *testing.T, db *store.DB, id, principal string, age time.D
 // An unreviewed session past its window blocks the operator who opened it from
 // opening another. The requester cannot clear it themselves — the review must
 // come from somebody else, which is what makes the block more than a formality.
-func TestUnreviewedBreakglassBlocksTheSameRequester(t *testing.T) {
+func TestOverdueBreakglassBlocksTheSameRequester(t *testing.T) {
 
 	ctx := context.Background()
 	db := newDB(t)
@@ -104,7 +104,7 @@ func TestUnreviewedBreakglassBlocksTheSameRequester(t *testing.T) {
 	seedBreakglass(t, db, "g-other", "person:sam", 48*time.Hour)
 
 	now := time.Now().UTC()
-	blocked, err := store.UnreviewedBreakglass(ctx, db.Reader(), "person:dana", now)
+	blocked, err := store.OverdueBreakglassFor(ctx, db.Reader(), "person:dana", now)
 	if err != nil {
 
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestUnreviewedBreakglassBlocksTheSameRequester(t *testing.T) {
 
 		t.Fatal(err)
 	}
-	blocked, err = store.UnreviewedBreakglass(ctx, db.Reader(), "person:dana", now)
+	blocked, err = store.OverdueBreakglassFor(ctx, db.Reader(), "person:dana", now)
 	if err != nil {
 
 		t.Fatal(err)
@@ -326,5 +326,51 @@ func TestMismatchesReturnsTheLatestPerTenantSecurityFirst(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "at-4" {
 
 		t.Fatalf("mismatches = %+v, want only at-4", got)
+	}
+}
+
+// ActiveBreakglassFor is the read that makes a session grant anything, so it
+// answers only for the principal who opened it, on that tenant, inside the box,
+// and not after an early close.
+func TestActiveBreakglassFor(t *testing.T) {
+
+	ctx := context.Background()
+	db := newDB(t)
+	now := time.Now().UTC()
+
+	if _, ok, err := store.ActiveBreakglassFor(ctx, db.Reader(), "t-demo", "person:dana", now); err != nil || ok {
+
+		t.Fatalf("no session: ok=%v err=%v", ok, err)
+	}
+	seedBreakglass(t, db, "g-old", "person:dana", 2*time.Hour) // past its 60 minutes
+	if _, ok, _ := store.ActiveBreakglassFor(ctx, db.Reader(), "t-demo", "person:dana", now); ok {
+
+		t.Error("an expired session is active")
+	}
+	g := seedBreakglass(t, db, "g-now", "person:dana", time.Minute)
+	got, ok, err := store.ActiveBreakglassFor(ctx, db.Reader(), "t-demo", "person:dana", now)
+	if err != nil || !ok || got.ID != g.ID {
+
+		t.Fatalf("open session = %+v ok=%v err=%v", got, ok, err)
+	}
+	if _, ok, _ := store.ActiveBreakglassFor(ctx, db.Reader(), "t-demo", "person:sam", now); ok {
+
+		t.Error("another principal holds dana's session")
+	}
+	if _, ok, _ := store.ActiveBreakglassFor(ctx, db.Reader(), "t-other", "person:dana", now); ok {
+
+		t.Error("the session is active on another tenant")
+	}
+	if held, err := store.ActiveBreakglassHeld(ctx, db.Reader(), "person:dana", now); err != nil || len(held) != 1 || held[0].ID != g.ID {
+
+		t.Errorf("held = %+v, %v", held, err)
+	}
+	if err := db.Tx(ctx, func(tx bun.Tx) error { return store.RevokeGrant(ctx, tx, g.ID, "person:sam") }); err != nil {
+
+		t.Fatal(err)
+	}
+	if _, ok, _ := store.ActiveBreakglassFor(ctx, db.Reader(), "t-demo", "person:dana", now); ok {
+
+		t.Error("a closed session is active")
 	}
 }
