@@ -1,5 +1,7 @@
 # Citadel - a PocketBase sandbox platform
 
+Website: [try.citadel-ai-apps.workers.dev](https://try.citadel-ai-apps.workers.dev/?utm_source=github&utm_content=readme)
+
 Multi-tenant hosting for [PocketBase](https://pocketbase.io) applications. Every
 tenant gets a **separate, hardened, independently-versioned PocketBase instance**
 in its own container on its own internal network. Tenants ship application
