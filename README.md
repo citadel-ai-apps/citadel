@@ -186,8 +186,8 @@ default principal is `$CITADEL_PRINCIPAL`, else `person:` plus the first of
 
 ```sh
 hack/in-vm.sh bin/citadel principal create person:ubuntu --name dev
-hack/in-vm.sh bin/citadel runtime-version add 0.42.2
-hack/in-vm.sh bin/citadel tenant create --slug demo --pb-version 0.42.2 \
+hack/in-vm.sh bin/citadel runtime-version add 0.42.3
+hack/in-vm.sh bin/citadel tenant create --slug demo --pb-version 0.42.3 \
     --owner person:ubuntu --disk-mib 256
 hack/in-vm.sh bin/citadel tenant status demo
 

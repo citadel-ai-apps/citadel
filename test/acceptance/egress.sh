@@ -25,7 +25,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT" || exit
 
 SLUG="${SLUG:-demo}"
-PB_VERSION="${PB_VERSION:-0.42.2}"
+PB_VERSION="${PB_VERSION:-0.42.3}"
 OWNER="${OWNER:-person:acceptance-egress}"
 PB_ROOT="${PB_ROOT:-/srv/citadel}"
 STATE_DB="$PB_ROOT/control/state.db"

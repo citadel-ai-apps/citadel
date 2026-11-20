@@ -80,7 +80,7 @@ func ListReleases(ctx context.Context, db bun.IDB, tenantID string) ([]Release, 
 	var out []Release
 	err := db.NewSelect().Model(&out).
 		Where("tenant_id = ?", tenantID).
-		Order("created_at DESC", "id DESC").
+		Order("created_at DESC", "rowid DESC").
 		Scan(ctx)
 	return out, err
 }

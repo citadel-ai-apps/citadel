@@ -147,7 +147,7 @@ type GrantFilter struct {
 // ListGrants returns matching grants, newest request first.
 func ListGrants(ctx context.Context, db bun.IDB, f GrantFilter) ([]Grant, error) {
 
-	q := db.NewSelect().Model((*Grant)(nil)).Order("requested_at DESC", "id DESC")
+	q := db.NewSelect().Model((*Grant)(nil)).Order("requested_at DESC", "rowid DESC")
 	if f.TenantID != "" {
 
 		q = q.Where("tenant_id = ?", f.TenantID)

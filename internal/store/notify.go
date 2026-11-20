@@ -90,7 +90,7 @@ type NotificationFilter struct {
 // ListNotifications returns notifications newest first.
 func ListNotifications(ctx context.Context, db bun.IDB, f NotificationFilter) ([]Notification, error) {
 
-	q := db.NewSelect().Model((*Notification)(nil)).Order("created_at DESC")
+	q := db.NewSelect().Model((*Notification)(nil)).Order("created_at DESC", "rowid DESC")
 	if f.TenantID != "" {
 
 		q = q.Where("tenant_id = ?", f.TenantID)

@@ -141,7 +141,7 @@ type UpgradeJobFilter struct {
 // ListUpgradeJobs returns jobs newest first.
 func ListUpgradeJobs(ctx context.Context, db bun.IDB, f UpgradeJobFilter) ([]UpgradeJob, error) {
 
-	q := db.NewSelect().Model((*UpgradeJob)(nil)).Order("created_at DESC", "id DESC")
+	q := db.NewSelect().Model((*UpgradeJob)(nil)).Order("created_at DESC", "rowid DESC")
 	if f.TenantID != "" {
 
 		q = q.Where("tenant_id = ?", f.TenantID)
@@ -179,7 +179,7 @@ func ActiveUpgrade(ctx context.Context, db bun.IDB, tenantID string) (UpgradeJob
 	err := db.NewSelect().Model(&j).
 		Where("tenant_id = ?", tenantID).
 		Where("state NOT IN (?)", bun.In(UpgradeTerminal)).
-		Order("created_at DESC").
+		Order("created_at DESC", "rowid DESC").
 		Limit(1).
 		Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {

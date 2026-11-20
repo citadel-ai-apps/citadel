@@ -83,7 +83,7 @@ func ListTransfers(ctx context.Context, db bun.IDB, tenantID string) ([]OwnerTra
 	var out []OwnerTransfer
 	err := db.NewSelect().Model(&out).
 		Where("tenant_id = ?", tenantID).
-		Order("offered_at DESC", "id DESC").
+		Order("offered_at DESC", "rowid DESC").
 		Scan(ctx)
 	return out, err
 }

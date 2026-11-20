@@ -9,9 +9,9 @@
 #
 #   make registry                                # local zot on 127.0.0.1:5000
 #   make builder                                 # the pinned BuildKit every image is built with
-#   make image PB_VERSION=0.42.2 HARDENING_REV=3 # build+push one image, print digest
+#   make image PB_VERSION=0.42.3 HARDENING_REV=3 # build+push one image, print digest
 #   make image-matrix HARDENING_REV=3            # every version in versions.txt
-#   make smoke PB_VERSION=0.42.2                 # image self-checks, by digest
+#   make smoke PB_VERSION=0.42.3                 # image self-checks, by digest
 #   make edge-image                              # Caddy + rate-limit module, by digest
 #   make egress-image                            # Squid WITH OpenSSL (ssl_bump needs it)
 #   make probe-image                             # FROM-scratch rehearsal probe (§12), by digest
@@ -90,7 +90,7 @@ builder:
 
 image: builder
 ifndef PB_VERSION
-	$(error PB_VERSION is required, e.g. make image PB_VERSION=0.42.2)
+	$(error PB_VERSION is required, e.g. make image PB_VERSION=0.42.3)
 endif
 	@test -f $(IMG_DIR)/checksums/pocketbase_$(PB_VERSION)_linux_$(ARCH).sha256 || \
 	  { echo "no pinned checksum for $(PB_VERSION)/$(ARCH); run $(IMG_DIR)/fetch-checksum.sh $(PB_VERSION)"; exit 1; }
@@ -186,7 +186,7 @@ registry:
 
 smoke:
 ifndef PB_VERSION
-	$(error PB_VERSION is required, e.g. make smoke PB_VERSION=0.42.2)
+	$(error PB_VERSION is required, e.g. make smoke PB_VERSION=0.42.3)
 endif
 	@digest=$$(grep "^$(PB_VERSION) h$(HARDENING_REV) $(ARCH) " $(DIGESTS) | tail -1 | awk '{print $$4}'); \
 	 test -n "$$digest" || { echo "no digest for $(PB_VERSION) h$(HARDENING_REV) in $(DIGESTS); run make image first"; exit 1; }; \
@@ -361,7 +361,7 @@ vm-bootstrap bootstrap-vm:
 # version PAIR whose JSVM APIs differ, which is why PB_FROM and PB_TO are built
 # by name rather than left to the matrix.
 PB_FROM ?= 0.22.55
-PB_TO   ?= 0.42.2
+PB_TO   ?= 0.42.3
 
 # Lets scripts outside make read the defaults above instead of duplicating
 # them (hack/bootstrap-vm.sh): `make -s print-HARDENING_REV`.

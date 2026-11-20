@@ -135,7 +135,7 @@ func TokenByID(ctx context.Context, db bun.IDB, id string) (APIToken, error) {
 // is safe to render.
 func ListTokens(ctx context.Context, db bun.IDB, principalID string) ([]APIToken, error) {
 
-	q := db.NewSelect().Model((*APIToken)(nil)).Order("created_at DESC", "id DESC")
+	q := db.NewSelect().Model((*APIToken)(nil)).Order("created_at DESC", "rowid DESC")
 	if principalID != "" {
 
 		q = q.Where("principal_id = ?", principalID)

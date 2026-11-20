@@ -91,6 +91,66 @@ func TestReleaseHistoryAndRollbackTarget(t *testing.T) {
 	}
 }
 
+// TIMESTAMP columns hold whole seconds, so two rows written in the same second
+// tie on created_at. The ids are random hex and say nothing about order, so the
+// tie must fall to insertion order: a failed deploy restores LatestBackup, and
+// picking the older of two same-second snapshots would restore the wrong data.
+func TestSameSecondRowsSortByInsertionOrder(t *testing.T) {
+
+	db, tn := fixture(t)
+	ctx := context.Background()
+	at := time.Date(2026, 11, 20, 10, 53, 47, 0, time.UTC)
+
+	// The newer row gets the lexically SMALLER id, so an "id DESC" tie-break
+	// would put it second.
+	err := db.Tx(ctx, func(tx bun.Tx) error {
+
+		for _, id := range []string{"rel-ffff", "rel-0000"} {
+
+			r := store.Release{ID: id, TenantID: tn.ID, Sha256: id, Manifest: `{"name":"x"}`,
+				Status: store.ReleaseValidated, CreatedAt: at}
+			if err := store.InsertRelease(ctx, tx, r); err != nil {
+
+				return err
+			}
+		}
+		for _, id := range []string{"bk-ffff", "bk-0000"} {
+
+			b := store.Backup{ID: id, TenantID: tn.ID, Kind: store.BackupPreDeploy,
+				Path: "/srv/citadel/backups/demo/pre_deploy/" + id + ".img.zst", PBVersion: "0.42.3", CreatedAt: at}
+			if err := store.InsertBackup(ctx, tx, b); err != nil {
+
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+
+		t.Fatal(err)
+	}
+
+	rows, err := store.ListReleases(ctx, db.Reader(), tn.ID)
+	if err != nil || len(rows) != 2 || rows[0].ID != "rel-0000" {
+
+		t.Errorf("ListReleases = %v, %v; want rel-0000 (inserted last) first", rows, err)
+	}
+	for name, get := range map[string]func() (store.Backup, error){
+		"LatestBackup": func() (store.Backup, error) {
+
+			return store.LatestBackup(ctx, db.Reader(), tn.ID, store.BackupPreDeploy)
+		},
+		"NewestBackup": func() (store.Backup, error) { return store.NewestBackup(ctx, db.Reader(), tn.ID) },
+	} {
+
+		b, err := get()
+		if err != nil || b.ID != "bk-0000" {
+
+			t.Errorf("%s = %q, %v; want bk-0000 (inserted last)", name, b.ID, err)
+		}
+	}
+}
+
 // §14.2: expiry is evaluated where enforcement reads the row, not swept by a
 // cleanup job, so an approved-but-lapsed grant must stop being active without
 // anything having rewritten it.

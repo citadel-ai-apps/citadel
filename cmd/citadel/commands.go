@@ -444,7 +444,7 @@ func (c *client) runtimeVersion(ctx context.Context, args []string) error {
 		}
 		if req.Version == "" {
 
-			return errors.New("runtime-version add needs a version, e.g. 0.42.2")
+			return errors.New("runtime-version add needs a version, e.g. 0.42.3")
 		}
 		raw, err := c.call(ctx, http.MethodPost, "/api/v1/admin/runtime-versions", req)
 		if err != nil {

@@ -27,7 +27,7 @@ SLUG="${SLUG:-upg}"
 # or the "deliberately incompatible" sections prove nothing: 0.22 predates the
 # 0.23 rework that removed onAfterBootstrap, daos and models.
 PB_FROM="${PB_FROM:-0.22.55}"
-PB_TO="${PB_TO:-0.42.2}"
+PB_TO="${PB_TO:-0.42.3}"
 # A compatible pair for the happy path, so section F upgrades something that is
 # genuinely expected to work.
 PB_OK_FROM="${PB_OK_FROM:-0.38.2}"

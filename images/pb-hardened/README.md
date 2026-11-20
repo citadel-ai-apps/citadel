@@ -8,9 +8,9 @@ Build and verify from the repo root (Docker work runs in the development VM):
 
 ```
 ./hack/in-vm.sh make registry                                # local zot on 127.0.0.1:5000
-./hack/in-vm.sh make image PB_VERSION=0.42.2 HARDENING_REV=3 # one image → digest
+./hack/in-vm.sh make image PB_VERSION=0.42.3 HARDENING_REV=3 # one image → digest
 ./hack/in-vm.sh make image-matrix HARDENING_REV=3            # every version in versions.txt
-./hack/in-vm.sh make smoke PB_VERSION=0.42.2                 # image self-checks by digest
+./hack/in-vm.sh make smoke PB_VERSION=0.42.3                 # image self-checks by digest
 ```
 
 The control plane schedules **digests, never tags**. `make image` appends to `digests.txt`,

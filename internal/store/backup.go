@@ -99,7 +99,7 @@ func ListBackups(ctx context.Context, db bun.IDB, tenantID string) ([]Backup, er
 	var out []Backup
 	err := db.NewSelect().Model(&out).
 		Where("tenant_id = ?", tenantID).
-		Order("created_at DESC", "id DESC").
+		Order("created_at DESC", "rowid DESC").
 		Scan(ctx)
 	return out, err
 }
@@ -143,7 +143,7 @@ func NewestBackup(ctx context.Context, db bun.IDB, tenantID string) (Backup, err
 	var b Backup
 	err := db.NewSelect().Model(&b).
 		Where("tenant_id = ?", tenantID).
-		Order("created_at DESC", "id DESC").
+		Order("created_at DESC", "rowid DESC").
 		Limit(1).
 		Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -216,7 +216,7 @@ func LatestBackup(ctx context.Context, db bun.IDB, tenantID, kind string) (Backu
 	err := db.NewSelect().Model(&b).
 		Where("tenant_id = ?", tenantID).
 		Where("kind = ?", kind).
-		Order("created_at DESC", "id DESC").
+		Order("created_at DESC", "rowid DESC").
 		Limit(1).
 		Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {

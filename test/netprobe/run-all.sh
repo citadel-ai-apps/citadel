@@ -23,7 +23,7 @@ cd "$REPO_ROOT" || exit
 
 SLUG_EGRESS="${SLUG_EGRESS:-npegr}"
 SLUG_PLAIN="${SLUG_PLAIN:-npplain}"
-PB_VERSION="${PB_VERSION:-0.42.2}"
+PB_VERSION="${PB_VERSION:-0.42.3}"
 OWNER="${OWNER:-person:netprobe}"
 PB_ROOT="${PB_ROOT:-/srv/citadel}"
 STATE_DB="$PB_ROOT/control/state.db"
